@@ -1,0 +1,4094 @@
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
+use App\Models\Admin\ApplicationModel;
+
+use App\Models\Admin\FormaModel;
+use App\Models\Admin\FormbModel;
+use App\Models\Admin\FormsaModel;
+use App\Models\Admin\FormsbModel;
+use App\Models\Admin\UserModel;
+use App\Models\CC_Forms_Meta;
+use App\Services\Competency\CompetencyApplicationService;
+use App\Services\Competency\CompetencyAdminQueryService;
+use App\Services\Competency\CompetencyDocumentReviewService;
+use App\Services\Competency\CompetencyDocumentSupport;
+use App\Services\Competency\CompetencyMetaService;
+use App\Services\Competency\CompetencyQcQscService;
+use App\Services\Competency\CompetencyWorkflowService;
+use App\Models\TnelbApplicantPhoto;
+use App\Models\TnelbApplicantsSign;
+use App\Models\TnelbAppsInstitute;
+
+use App\Models\Admin\Mst_equipment_tbl;
+
+use App\Models\Admin\TnelbMenu;
+
+use App\Models\Admin\Portaladmin_menu;
+use App\Models\Admin\Tnelb_homeslider_tbl;
+use App\Models\Admin\Tnelb_Mst_Media;
+use App\Models\Admin\Tnelb_submenus;
+use App\Models\Equipment_storetmp_A;
+use App\Models\MstLicence;
+use App\Models\Tnelb_banksolvency_a;
+use Carbon\Carbon;
+use App\Models\Admin\FeesValidity;
+use App\Models\Admin\Mst_checklist;
+use App\Models\Admin\Mst_Logins;
+use Illuminate\Support\Facades\Storage;
+
+use App\Models\CC_Checklist_applicant;
+use App\Models\CC_Experience;
+use App\Models\CC_Forms_cert;
+use App\Models\Cl_Checklist_applicant;
+use App\Models\Tnelb_CC_Digitization;
+use App\Support\DashboardApplicationTimeline;
+
+class LoginController extends Controller
+{
+    public function index()
+    {
+
+        return view('admin.index');
+    }
+
+    public function login(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'password' => 'required|string',
+            'captcha' => ['required', function ($attribute, $value, $fail) {
+                if (session('custom_captcha') !== $value) {
+                    $fail('The captcha is incorrect.');
+                }
+            }],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $check_user = Mst_Logins::where('user_name', $request->username)
+            ->orWhere('user_email', $request->username)
+            ->first();
+
+        if ($check_user) {
+            // Only active staff can log in (user_status: 1 = active)
+            if ((int) $check_user->user_status !== 1) {
+                return response()->json(['message' => 'Your account is inactive. Please contact the administrator.'], 403);
+            }
+
+            $password = $request->password ?? $request->input('password');
+            if (\Illuminate\Support\Facades\Hash::check($password, $check_user->user_passwd)) {
+                Auth::guard('admin')->login($check_user);
+
+                if (Auth::guard('admin')->check()) {
+                    return response()->json(['message' => 'Login successful'], 200);
+                }
+
+                return response()->json(['message' => 'Login failed during session handling.'], 401);
+            }
+        }
+
+        return response()->json(['message' => 'Invalid login credentials. Please try again.'], 401);
+    }
+    // public function dashboard()
+    // {
+    //     $staff = Auth::user();
+
+    //     if (!$staff || !$staff->name) {
+    //         return abort(403, 'Unauthorized');
+    //     }
+
+    //     $assignedFormID = $staff->form_id;
+    //     $processed_by   = $this->getProcessedByRole($staff->name);
+
+
+    //     // Fetch data using model methods
+    //     $pendings                   = ApplicationModel::getPendingCount($assignedFormID);
+    //     $completed                  = ApplicationModel::getCompletedCount($assignedFormID, $processed_by);
+    //     $auditor_pendings           = ApplicationModel::getAuditorPendingCounts();
+    //     $auditorForma_pendings      = FormaModel::getAuditorFormAPendingCounts();
+    //     $secForma_counts            = FormaModel::getSecFormACounts();
+    //     $secretary                  = ApplicationModel::getSecretaryPendingCounts();
+    //     $secretaryCompleted         = ApplicationModel::getSecretaryComplCounts();
+    //     $form_a_pending             = FormaModel::getPendingCountForma();
+    //     $form_a_completed           = FormaModel::getcompleteCountForma();
+
+
+    //     $president = DB::table('tnelb_forms as f')
+    //         ->leftJoin('tnelb_application_tbl as ta', 'ta.form_id', '=', 'f.id')
+    //         ->select(
+    //             'f.id',
+    //             'f.form_name',
+    //             'f.license_name',
+    //             DB::raw("COUNT(CASE WHEN ta.status = 'F' AND ta.processed_by = 'SE' THEN 1 END) as pending_count"),
+    //             DB::raw("COUNT(CASE WHEN ta.status = 'A' AND ta.processed_by = 'PR' THEN 1 END) as completed_count")
+    //         )
+    //         ->groupBy('f.id', 'f.form_name', 'f.license_name')
+    //         ->get();
+
+
+    //     $presidentFormA = DB::table('ccl_forma_meta as ta')
+    //         ->select(
+    //             DB::raw("COUNT(CASE WHEN ta.application_status IN ('F','RF') AND ta.processed_by IN ('SE','S') THEN 1 END) as pending_count"),
+    //             DB::raw("COUNT(CASE WHEN ta.application_status = 'A' AND ta.processed_by = 'PR' THEN 1 END) as completed_count")
+    //         )
+    //         ->first();
+
+    //     $formColors = [
+    //         'C'  => 'bg-yellow',
+    //         'B'  => 'bg-red',
+    //         'WH' => 'bg-H',
+    //         'PG' => 'bg-green',
+    //     ];
+
+    //     // Determine the view based on role
+    //     $view = match ($staff->name) {
+    //         'President'   => 'admin.dashboard.president',
+    //         'Secretary'   => 'admin.dashboard.index',
+    //         'Supervisor'  => 'admin.dashboard.loginpage.supervisor_index',
+    //         'Assistant Secretary'     => 'admin.dashboard.loginpage.auditor_index',
+    //         'Supervisor2' => 'admin.dashboard.loginpage.supervisor_w_index',
+    //         default       => abort(403, 'Unauthorized'),
+    //     };
+
+    //     $applications = DB::table('mst_workflows as mw')
+    //         ->join('tnelb_application_tbl as ta', 'mw.application_id', '=', 'ta.application_id') // Join condition
+    //         ->select('mw.*', 'ta.applicant_name') // Select fields
+    //         ->where('ta.status', ['P', 'F']) // Select fields
+    //         ->get();
+
+    //    $query1 = DB::table('tnelb_application_tbl')
+    //         ->select('*')
+    //         ->where('status', 'P')
+    //         ->get();
+
+    //     $query2 = DB::table('ccl_forma_meta')
+    //         ->select('id', '*')
+    //         ->where('application_status', 'P')
+    //         ->get();
+
+    //     $recieved_apps = $query1->merge($query2);
+
+
+    //     $query3 = DB::table('tnelb_application_tbl')
+    //         ->select('*')
+    //         ->where('status', 'F')
+    //         ->get();
+
+    //     $query3 = DB::table('ccl_forma_meta')
+    //         ->select('id', '*')
+    //         ->where('application_status', 'F')
+    //         ->get();
+
+    //     $inprogress = $query1->merge($query2);
+
+
+    //     $form_wh_counts['pendings'] = DB::table('tnelb_application_tbl')
+    //     ->where('status', 'P')
+    //     ->where('form_name', 'WH')
+    //     ->count();
+
+
+
+    //     return view($view, compact(
+    //         'applications',
+    //         'completed',
+    //         'pendings',
+    //         'auditor_pendings',
+    //         'formColors',
+    //         'secretary',
+    //         'president',
+    //         'secretaryCompleted',
+    //         'form_a_pending',
+    //         'form_a_completed',
+    //         'auditorForma_pendings',
+    //         'secForma_counts',
+    //         'presidentFormA',
+    //         'recieved_apps',
+    //         'inprogress','form_wh_counts'
+    //     ));
+
+    // }
+
+
+    /**
+     * NEW dashboard:
+     * - Superadmin → CMS dashboard (admincms.dashboard.index)
+     * - Other active users → common dashboard driven by assigned forms in user_assigned.
+     */
+    public function dashboard()
+    {
+
+
+        $staff = Auth::user();
+
+
+        if (!$staff) {
+            return abort(403, 'Unauthorized');
+        }
+
+
+        $roleCode     = $staff->role_code ?? optional($staff->role)->role_code ?? null;
+
+        $isSuperadmin = $roleCode === 'SUPADMIN';
+
+        if ($isSuperadmin) {
+
+
+            $menus = TnelbMenu::whereNotIn('id', [1, 2, 3])
+                ->orderBy('order_id')
+                ->get();
+
+            $submenus = Tnelb_submenus::all();
+
+            return view('admincms.dashboard.index', compact('staff', 'menus', 'submenus', 'isSuperadmin'));
+        }
+
+        $assignedFormsQuery = \App\Models\Admin\StaffAssigned::where('user_id', $staff->id)
+            ->where('is_active', 1)
+            ->whereIn('form_type', ['N', 'R', 'D']);
+
+        if (DB::getDriverName() === 'pgsql') {
+            $assignedFormsQuery->whereRaw("jsonb_array_length(COALESCE(form_id, '[]'::jsonb)) > 0");
+        } else {
+            $assignedFormsQuery->whereRaw('JSON_LENGTH(form_id) > 0');
+        }
+
+        $assignedRows = $assignedFormsQuery->get(['form_id', 'form_type']);
+
+        // Flatten all unique form IDs across N + R
+        $assignedFormIDs = $assignedRows
+            ->pluck('form_id')
+            ->flatten()
+            ->map(function ($id) {
+                return (int) $id;
+            })
+            ->unique()
+            ->values()
+            ->all();
+
+
+
+        // Look up licence / form details for those IDs
+        $licences = DB::table('mst_licences as f')
+            ->whereIn('f.id', $assignedFormIDs)
+            ->select(
+                'f.id',
+                'f.form_name',
+                'f.form_code',
+                'f.licence_name',
+                // color_code drives the card background class
+                'f.cert_licence_code as color_code',
+                // cert_licence_code (EA, EB, etc.) is used to map contractor
+                // application rows (ccl_forma_meta.form_name) back to
+                // the correct mst_licences IDs when building contractorCounts.
+                'f.cert_licence_code as cert_licence_code',
+                'f.category_id'
+            )
+            ->get()
+            ->keyBy('id');
+
+        $roleLevel = (int) (optional($staff->role)->role_level ?? 0);
+        $isSupervisorRole = ($roleLevel === 1) || in_array($staff->name ?? '', ['Supervisor', 'Supervisor2'], true);
+
+        // Identify contractor categories from LicenceCategory table (used later for both
+        // pending counts and card classification). Fallback to name check if none found.
+        $contractorCategoryIds = \App\Models\Admin\LicenceCategory::whereRaw("LOWER(category_name) LIKE ?", ['%contractor%'])
+            ->pluck('id')
+            ->map(function ($id) {
+                return (int) $id;
+            })
+            ->all();
+
+        // Pending application counts (competency: cc_form_s_meta + cc_workflow_* per form; Form P: tnelb_form_p + cc_workflow_formp)
+        $pendingCountsMap = [];
+        $ccAdminQuery = app(CompetencyAdminQueryService::class);
+        $formPId = (int) DB::table('mst_licences')->where('cert_licence_code', 'P')->value('id');
+
+        if (! empty($assignedFormIDs)) {
+            $supervisorRoleId = (int) (DB::table('mst_roles')->where('role_name', 'Supervisor')->value('r_id') ?? 0);
+            if ($supervisorRoleId === 0) {
+                $supervisorRoleId = (int) ($staff->roles_id ?? 0);
+            }
+            $roleId = (int) ($staff->roles_id ?? 0);
+
+            $ccFormIds = array_values(array_intersect($assignedFormIDs, CompetencyAdminQueryService::CC_META_FORM_IDS));
+            $ccAdminQuery->mergePendingCountRows(
+                $ccAdminQuery->dashboardCcPendingCountRows($ccFormIds, $isSupervisorRole, $supervisorRoleId, $roleId, $roleLevel),
+                $pendingCountsMap
+            );
+
+            $legacyFormIds = array_values(array_diff(
+                $assignedFormIDs,
+                $ccFormIds,
+                $formPId > 0 ? [$formPId] : []
+            ));
+
+            if ($legacyFormIds !== []) {
+                if ($isSupervisorRole) {
+                    $twLastSub = DB::table('tnelb_workflow')
+                        ->select('application_id', DB::raw('MAX(id) as max_id'))
+                        ->groupBy('application_id');
+
+                    $pendingCounts = DB::table('cc_form_s_meta as ta')
+                        ->leftJoinSub($twLastSub, 'tw_last', function ($join) {
+                            $join->on('ta.application_id', '=', 'tw_last.application_id');
+                        })
+                        ->leftJoin('tnelb_workflow as tw', function ($join) {
+                            $join->on('tw.application_id', '=', 'tw_last.application_id')
+                                ->on('tw.id', '=', 'tw_last.max_id');
+                        })
+                        ->whereIn('ta.form_id', $legacyFormIds)
+                        ->whereIn('ta.app_status', ['P', 'RE'])
+                        ->whereIn('ta.payment_status', ['payment', 'paid'])
+                        ->whereNotExists(function ($q) {
+                            $q->select(DB::raw(1))->from('tnelb_workflow_a as twa')->whereRaw('twa.application_id = ta.application_id');
+                        })
+                        ->where(function ($q) use ($supervisorRoleId) {
+                            $q->whereNull('tw.id')
+                                ->orWhere(function ($q2) use ($supervisorRoleId) {
+                                    $q2->where('tw.appl_status', 'RE')
+                                        ->where(function ($q3) use ($supervisorRoleId) {
+                                            $q3->where('tw.processed_by', 'AP')
+                                                ->orWhere('tw.forwarded_to', $supervisorRoleId);
+                                        });
+                                });
+                        })
+                        ->selectRaw('ta.form_id, ta.appl_type, COUNT(DISTINCT ta.application_id) as cnt')
+                        ->groupBy('ta.form_id', 'ta.appl_type')
+                        ->get();
+                } else {
+                    $twLast = DB::table('tnelb_workflow')
+                        ->select('application_id', DB::raw('MAX(id) as max_id'))
+                        ->groupBy('application_id');
+
+                    $twaLast = DB::table('tnelb_workflow_a')
+                        ->select('application_id', DB::raw('MAX(id) as max_id'))
+                        ->groupBy('application_id');
+
+                    $currentFromTw = DB::table('tnelb_workflow as tw')
+                        ->joinSub($twLast, 'tw_last', function ($join) {
+                            $join->on('tw.application_id', '=', 'tw_last.application_id')
+                                ->on('tw.id', '=', 'tw_last.max_id');
+                        })
+                        ->where('tw.forwarded_to', $roleId)
+                        ->whereIn('tw.appl_status', ['F', 'RF'])
+                        ->select('tw.application_id');
+
+                    $currentFromTwa = DB::table('tnelb_workflow_a as tw')
+                        ->joinSub($twaLast, 'tw_last', function ($join) {
+                            $join->on('tw.application_id', '=', 'tw_last.application_id')
+                                ->on('tw.id', '=', 'tw_last.max_id');
+                        })
+                        ->where('tw.forwarded_to', $roleId)
+                        ->whereIn('tw.appl_status', ['F', 'RF'])
+                        ->select('tw.application_id');
+
+                    $previousProcessedBy = match ($roleLevel) {
+                        2 => ['S'],
+                        3 => ['A'],
+                        4 => ['SE'],
+                        default => [],
+                    };
+
+                    $fallbackAppIds = DB::table('tnelb_application_tbl as ta')
+                        ->whereIn('ta.status', ['F', 'RF'])
+                        ->whereIn('ta.payment_status', ['payment', 'paid'])
+                        ->when($previousProcessedBy !== [], fn($q) => $q->whereIn('ta.processed_by', $previousProcessedBy))
+                        ->whereNotExists(function ($q) {
+                            $q->select(DB::raw(1))
+                                ->from('tnelb_workflow as tw')
+                                ->whereRaw('tw.application_id = ta.application_id');
+                        })
+                        ->whereNotExists(function ($q) {
+                            $q->select(DB::raw(1))
+                                ->from('tnelb_workflow_a as twa')
+                                ->whereRaw('twa.application_id = ta.application_id');
+                        })
+                        ->select('ta.application_id');
+
+                    $pendingCounts = DB::query()
+                        ->fromSub($currentFromTw->union($currentFromTwa)->union($fallbackAppIds), 'cur')
+                        ->join('tnelb_application_tbl as ta', 'ta.application_id', '=', 'cur.application_id')
+                        ->whereIn('ta.form_id', $legacyFormIds)
+                        ->whereIn('ta.payment_status', ['payment', 'paid'])
+                        ->selectRaw('ta.form_id, ta.appl_type, COUNT(*) as cnt')
+                        ->groupBy('ta.form_id', 'ta.appl_type')
+                        ->get();
+                }
+
+                $ccAdminQuery->mergePendingCountRows($pendingCounts ?? collect(), $pendingCountsMap);
+            }
+
+            if ($formPId > 0 && in_array($formPId, $assignedFormIDs, true)) {
+                $ccAdminQuery->mergePendingCountRows(
+                    $ccAdminQuery->dashboardFormPPendingCountRows($isSupervisorRole, $supervisorRoleId, $roleId),
+                    $pendingCountsMap,
+                    $formPId
+                );
+            }
+
+
+            // Contractor licences (Form A/B & their variants) use dedicated EA/EB tables.
+            // Add their pending counts so contractor cards can display New/Renewal correctly.
+            $contractorLicences = $licences->filter(function ($lic) use ($contractorCategoryIds) {
+                if (!empty($contractorCategoryIds)) {
+                    return in_array((int) ($lic->category_id ?? 0), $contractorCategoryIds, true);
+                }
+                return stripos($lic->licence_name ?? '', 'contractor') !== false;
+            });
+
+            if ($contractorLicences->isNotEmpty()) {
+                // Map contractor form_code (A, B, etc) to one or more mst_licences IDs.
+                // Contractor application tables (e.g. ccl_forma_meta) store form_name
+                // as the base form code (A, B, ...), not the cert_licence_code (EA, EB, ...),
+                // so we group by form_code here to make the mapping line up.
+                $contractorFormToIds = $contractorLicences
+                    ->groupBy(function ($lic) {
+                        return strtoupper((string) ($lic->form_code ?? ''));
+                    })
+                    ->map(function ($group) {
+                        return $group->pluck('id')->all();
+                    });
+
+
+                $contractorCounts = collect();
+
+                // EA (A/SA) and EB (B/SB) application tables share the same structure
+                $contractorTables = ['ccl_forma_meta'];
+
+                foreach ($contractorTables as $tbl) {
+
+                    if ($staff->role_id == '1') {
+
+
+
+                        // recent modify for count form A
+                        $rows = DB::table($tbl . ' as ta')
+                            // For contractor licences, treat both freshly submitted and
+                            // in-workflow applications as "pending" so cards show any
+                            // application that is not finally approved/rejected.
+                            // ->whereIn('ta.application_status', ['P', 'RE', 'F', 'RF'])
+                            ->whereIn('ta.application_status', ['P', 'RE'])
+                            ->where(function ($query) {
+                                $query->whereIn('ta.processed_by', ['A', 'SE'])
+                                    ->orWhereNull('ta.processed_by');
+                            })
+                            ->whereIn('ta.payment_status', ['payment', 'paid'])
+                            ->selectRaw('ta.form_name, TRIM(ta.appl_type) as appl_type, COUNT(*) as cnt')
+                            ->groupBy('ta.form_name', DB::raw('TRIM(ta.appl_type)'))
+                            ->get();
+
+                            // print_r($rows); exit;
+                    } elseif ($staff->role_id == '2') {
+                        $rows = DB::table($tbl . ' as ta')
+                            // For contractor licences, treat both freshly submitted and
+                            // in-workflow applications as "pending" so cards show any
+                            // application that is not finally approved/rejected.
+                            // ->whereIn('ta.application_status', ['P', 'RE', 'F', 'RF'])
+                            ->whereIn('ta.application_status', ['F'])
+                            ->whereIn('ta.processed_by', ['S'])
+                            ->whereIn('ta.payment_status', ['payment', 'paid'])
+                            ->selectRaw('ta.form_name, TRIM(ta.appl_type) as appl_type, COUNT(*) as cnt')
+                            ->groupBy('ta.form_name', DB::raw('TRIM(ta.appl_type)'))
+                            ->get();
+                    } elseif ($staff->role_id == '3') {
+                        $rows = DB::table($tbl . ' as ta')
+                            // For contractor licences, treat both freshly submitted and
+                            // in-workflow applications as "pending" so cards show any
+                            // application that is not finally approved/rejected.
+                            // ->whereIn('ta.application_status', ['P', 'RE', 'F', 'RF'])
+
+
+                            ->whereIn('ta.application_status', ['F', 'RF', 'RE', 'PRE'])
+                            ->whereIn('ta.processed_by', ['A', 'PR'])
+                            ->whereIn('ta.payment_status', ['payment', 'paid'])
+                            ->selectRaw('ta.form_name, TRIM(ta.appl_type) as appl_type, COUNT(*) as cnt')
+                            ->groupBy('ta.form_name', DB::raw('TRIM(ta.appl_type)'))
+                            ->get();
+                    } elseif ($staff->role_id == '4') {
+
+                        $rows = DB::table($tbl . ' as ta')
+                            // For contractor licences, treat both freshly submitted and
+                            // in-workflow applications as "pending" so cards show any
+                            // application that is not finally approved/rejected.
+                            // ->whereIn('ta.application_status', ['P', 'RE', 'F', 'RF'])
+                            ->whereIn('ta.application_status', ['F', 'RF'])
+                            ->whereIn('ta.processed_by', ['SE'])
+                            ->whereIn('ta.payment_status', ['payment', 'paid'])
+                            ->selectRaw('ta.form_name, TRIM(ta.appl_type) as appl_type, COUNT(*) as cnt')
+                            ->groupBy('ta.form_name', DB::raw('TRIM(ta.appl_type)'))
+                            ->get();
+                    }
+
+
+
+                    $contractorCounts = $contractorCounts->merge($rows);
+                }
+
+                foreach ($contractorCounts as $row) {
+                    $formCode = strtoupper((string) ($row->form_name ?? ''));
+
+                    if (empty($formCode) || !isset($contractorFormToIds[$formCode])) {
+                        continue;
+                    }
+
+                    $applType = strtoupper((string) ($row->appl_type ?? ''));
+
+                    $type = in_array($applType, ['N', 'R', 'D', 'A'], true)
+                        ? $applType
+                        : 'N';
+                    $cnt  = (int) ($row->cnt ?? 0);
+
+
+                    foreach ($contractorFormToIds[$formCode] as $licId) {
+
+                        if (!isset($pendingCountsMap[$licId])) {
+                            $pendingCountsMap[$licId] = ['N' => 0, 'R' => 0, 'D' => 0, 'A' => 0];
+                        }
+                        $pendingCountsMap[$licId][$type] += $cnt;
+                    }
+                }
+            }
+        }
+        // Build a detailed flat list combining ID + type + licence details
+        $assignedForms = $assignedRows
+            ->flatMap(function ($row) use ($licences) {
+                $type = $row->form_type;
+                $typeLabel = $type === 'N'
+                    ? 'New'
+                    : ($type === 'R'
+                        ? 'Renewal'
+                        : ($type === 'D'
+                            ? 'Digitization'
+                            : $type));
+
+                return collect($row->form_id)->map(function ($id) use ($type, $typeLabel, $licences) {
+                    $id = (int) $id;
+                    $lic = $licences->get($id);
+
+                    return [
+                        'id'             => $id,
+                        'form_type'      => $type,
+                        'form_type_label' => $typeLabel,
+                        'form_name'      => $lic->form_name ?? null,
+                        'form_code'      => $lic->form_code ?? null,
+                        'licence_name'   => $lic->licence_name ?? null,
+                        'color_code'     => $lic->color_code ?? null,
+                        'category_id'    => $lic->category_id ?? null,
+                    ];
+                });
+            })
+            ->values();
+
+
+
+
+
+
+        $assignedFormSummary = $assignedForms
+            ->groupBy('id')
+            ->map(function ($items) use ($pendingCountsMap) {
+
+                $first = $items->first();
+                $fid = $first['id'];
+
+                $counts = array_merge(
+                    ['N' => 0, 'R' => 0, 'D' => 0, 'A' => 0],
+                    $pendingCountsMap[$fid] ?? []
+                );
+
+                return [
+                    'id'            => $fid,
+                    'form_name'     => $first['form_name'],
+                    'licence_name'  => $first['licence_name'],
+                    'color_code'    => $first['color_code'],
+                    'category_id'   => $first['category_id'],
+                    'form_code'     => $first['form_code'],
+                    'new_count'     => $counts['N'],
+                    'renewal_count' => $counts['R'],
+                    'digi_count'    => $counts['D'],
+                    'alteration_count' => $counts['A'],
+                ];
+            })
+            ->values()
+            ->all();
+
+        $formColors = [
+            'C'   => 'bg-yellow',
+            'B'   => 'bg-red',
+            'H'   => 'bg-H',
+            'P'   => 'bg-green',
+            // Contractor licence  colors
+            'EA' => 'bg-thickgreen',
+            'EB' => 'bg-dark',
+            'ESA' => 'bg-thickblue',
+            'ESB' => 'bg-gray',
+        ];
+
+        // Classify: Contractor (by category/name) → Amendments (by LicenceCategory) → Competency (rest)
+        $summaryCollection = collect($assignedFormSummary);
+
+        $contractorCardsCollection = $summaryCollection
+            ->filter(function ($item) use ($contractorCategoryIds) {
+                if (!empty($contractorCategoryIds)) {
+                    return in_array((int) ($item['category_id'] ?? 0), $contractorCategoryIds, true);
+                }
+
+                $name = mb_strtolower($item['licence_name'] ?? '');
+                return strpos($name, 'contractor') !== false;
+            })
+            ->values();
+
+        $contractorIds = $contractorCardsCollection->pluck('id')->all();
+
+        // Amendments: use LicenceCategory so forms like "Certificate H to B" are included
+        $amendmentCategoryIds = \App\Models\Admin\LicenceCategory::whereRaw("LOWER(category_name) LIKE ?", ['%amend%'])
+            ->pluck('id')
+            ->map(function ($id) {
+                return (int) $id;
+            })
+            ->all();
+
+        $amendmentCardsCollection = $summaryCollection
+            ->reject(function ($item) use ($contractorIds) {
+                return in_array($item['id'], $contractorIds, true);
+            })
+            ->filter(function ($item) use ($amendmentCategoryIds) {
+                if (empty($amendmentCategoryIds)) {
+                    $name = mb_strtolower($item['licence_name'] ?? '');
+                    return strpos($name, 'amend') !== false;
+                }
+                return in_array((int) ($item['category_id'] ?? 0), $amendmentCategoryIds, true);
+            })
+            ->values();
+
+        $amendmentIds = $amendmentCardsCollection->pluck('id')->all();
+        $contractorOrAmendmentIds = array_merge($contractorIds, $amendmentIds);
+
+
+        $competencyCardsCollection = $summaryCollection
+            ->reject(function ($item) use ($contractorOrAmendmentIds) {
+                return in_array($item['id'], $contractorOrAmendmentIds, true);
+            })
+            // Drop any placeholder rows with missing form/licence data
+            ->filter(function ($item) {
+                return !empty($item['form_name']) && !empty($item['licence_name']);
+            })
+            ->values();
+
+        $competencyCards = $competencyCardsCollection->all();
+
+
+
+        $contractorCards = $contractorCardsCollection->all();
+
+        // dd($contractorCards);exit;
+
+
+
+        $amendmentCards = $amendmentCardsCollection->all();
+
+        // Pendancy Report data (used for Secretary and President dashboards)
+        $recieved_apps = collect();
+        $inprogress = collect();
+        if (in_array($staff->name ?? '', ['Secretary', 'President'], true)) {
+            $receivedFromCc = $ccAdminQuery->dashboardReceivedFromCcMeta();
+            $receivedFromLegacy = DB::table('tnelb_application_tbl as ta')
+                ->leftJoin('mst_licences as f', 'ta.form_id', '=', 'f.id')
+                ->whereNotIn('ta.form_name', ['S', 'W', 'WH', 'P'])
+                ->whereIn('ta.status', ['F', 'RF'])
+                ->where('ta.processed_by', 'A')
+                ->whereIn('ta.payment_status', ['payment', 'paid'])
+                ->select(
+                    'ta.application_id',
+                    DB::raw('COALESCE(f.form_code, ta.form_name) as form_name'),
+                    'ta.created_at',
+                    'ta.updated_at',
+                    'ta.processed_by'
+                )
+                ->orderByDesc('ta.created_at')
+                ->get();
+            $receivedFromEa = DB::table('ccl_forma_meta')
+                ->whereIn('application_status', ['F', 'RF'])
+                ->where('processed_by', 'A')
+                ->whereIn('payment_status', ['payment', 'paid'])
+                ->select('application_id', 'form_name', 'created_at', 'updated_at', 'processed_by')
+                ->orderByDesc('created_at')
+                ->get();
+            $recieved_apps = $receivedFromCc
+                ->merge($receivedFromLegacy)
+                ->merge($receivedFromEa)
+                ->sortByDesc('created_at')
+                ->values();
+
+            $inprogressFromCc = $ccAdminQuery->dashboardInProgressFromCcMeta();
+            $inprogressFromLegacy = DB::table('tnelb_application_tbl as ta')
+                ->leftJoin('mst_licences as f', 'ta.form_id', '=', 'f.id')
+                ->whereNotIn('ta.form_name', ['S', 'W', 'WH', 'P'])
+                ->whereIn('ta.status', ['F', 'RF', 'QU'])
+                ->whereIn('ta.payment_status', ['payment', 'paid'])
+                ->select(
+                    'ta.application_id',
+                    DB::raw('COALESCE(f.form_code, ta.form_name) as form_name'),
+                    'ta.created_at',
+                    'ta.updated_at',
+                    'ta.processed_by',
+                    DB::raw('ta.status as status')
+                )
+                ->orderByDesc('ta.updated_at')
+                ->get();
+            $inprogressFromEa = DB::table('ccl_forma_meta')
+                ->whereIn('application_status', ['F', 'RF', 'QU'])
+                ->whereIn('payment_status', ['payment', 'paid'])
+                ->select('application_id', 'form_name', 'created_at', 'updated_at', 'processed_by', DB::raw('application_status as status'))
+                ->orderByDesc('updated_at')
+                ->get();
+            $inprogress = $inprogressFromCc
+                ->merge($inprogressFromLegacy)
+                ->merge($inprogressFromEa)
+                ->sortByDesc('updated_at')
+                ->values();
+        }
+
+
+
+        return view('admin.dashboard.president_dashboard', compact(
+            'staff',
+            'assignedFormIDs',
+            'assignedForms',
+            'assignedFormSummary',
+            'competencyCards',
+            'contractorCards',
+            'amendmentCards',
+            'formColors',
+            'recieved_apps',
+            'inprogress'
+        ));
+    }
+
+    /**
+     * Completed applications dashboard: same card grid as staff_dashboard but for
+     * approved applications (Competency Certificates, Contractor Licences, Amendments) with counts.
+     */
+    public function completedApplications()
+    {
+
+        $staff = Auth::user();
+        if (!$staff) {
+            return abort(403, 'Unauthorized');
+        }
+
+        $roleCode = $staff->role_code ?? optional($staff->role)->role_code ?? null;
+        if ($roleCode === 'SUPADMIN') {
+            return redirect()->route('admin.dashboard');
+        }
+
+        $assignedFormsQuery = \App\Models\Admin\StaffAssigned::where('user_id', $staff->id)
+            ->where('is_active', 1)
+            ->whereIn('form_type', ['N', 'R', 'D']);
+
+        if (DB::getDriverName() === 'pgsql') {
+            $assignedFormsQuery->whereRaw("jsonb_array_length(COALESCE(form_id, '[]'::jsonb)) > 0");
+        } else {
+            $assignedFormsQuery->whereRaw('JSON_LENGTH(form_id) > 0');
+        }
+
+        $assignedRows = $assignedFormsQuery->get(['form_id', 'form_type']);
+        $assignedFormIDs = $assignedRows
+            ->pluck('form_id')
+            ->flatten()
+            ->map(fn($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($assignedFormIDs)) {
+            return view('admin.dashboard.completed_applications', [
+                'staff' => $staff,
+                'competencyCards' => [],
+                'contractorCards' => [],
+                'amendmentCards' => [],
+                'formColors' => [
+                    'C' => 'bg-yellow',
+                    'B' => 'bg-red',
+                    'H' => 'bg-H',
+                    'P' => 'bg-green',
+                    'EA' => 'bg-thickgreen',
+                    'SA' => 'bg-thickgreen',
+                ],
+            ]);
+        }
+
+        $licences = DB::table('mst_licences as f')
+            ->whereIn('f.id', $assignedFormIDs)
+            ->select('f.id', 'f.form_name', 'f.form_code', 'f.licence_name', 'f.cert_licence_code as color_code', 'f.category_id')
+            ->get()
+            ->keyBy('id');
+
+        $contractorCategoryIds = \App\Models\Admin\LicenceCategory::whereRaw("LOWER(category_name) LIKE ?", ['%contractor%'])
+            ->pluck('id')
+            ->map(fn($id) => (int) $id)
+            ->all();
+
+        $amendmentCategoryIds = \App\Models\Admin\LicenceCategory::whereRaw("LOWER(category_name) LIKE ?", ['%amend%'])
+            ->pluck('id')
+            ->map(fn($id) => (int) $id)
+            ->all();
+
+        $completedCountsMap = [];
+        $ccAdminQuery = app(CompetencyAdminQueryService::class);
+
+        $ccFormIds = array_values(array_intersect($assignedFormIDs, CompetencyAdminQueryService::CC_META_FORM_IDS));
+
+        if ($ccFormIds !== []) {
+            $ccAdminQuery->mergePendingCountRows(
+                $ccAdminQuery->dashboardCcCompletedCountRows($ccFormIds),
+                $completedCountsMap
+            );
+        }
+
+        // Contractor tables: ccl_forma_meta (Form A/B and variants)
+        $contractorLicences = $licences->filter(function ($lic) use ($contractorCategoryIds) {
+            if (!empty($contractorCategoryIds)) {
+                return in_array((int) ($lic->category_id ?? 0), $contractorCategoryIds, true);
+            }
+            return stripos($lic->licence_name ?? '', 'contractor') !== false;
+        });
+
+        if ($contractorLicences->isNotEmpty()) {
+            $contractorFormToIds = $contractorLicences
+                ->groupBy(function ($lic) {
+                    return strtoupper((string) ($lic->form_code ?? ''));
+                })
+                ->map(fn($group) => $group->pluck('id')->all());
+
+            $contractorTables = ['ccl_forma_meta'];
+
+            if (Schema::hasTable('tnelb_esa_applications')) {
+                $contractorTables[] = 'tnelb_esa_applications';
+            }
+
+            foreach ($contractorTables as $tbl) {
+                if (! Schema::hasTable($tbl)) {
+                    continue;
+                }
+
+                $rows = DB::table($tbl . ' as ta')
+                    ->where('ta.application_status', 'A')
+                    ->selectRaw('ta.form_name, ta.appl_type, COUNT(*) as cnt')
+                    ->groupBy('ta.form_name', 'ta.appl_type')
+                    ->get();
+
+                foreach ($rows as $row) {
+                    $formCode = strtoupper(trim((string) ($row->form_name ?? '')));
+
+                    if ($formCode === '' || ! isset($contractorFormToIds[$formCode])) {
+                        continue;
+                    }
+
+                    $applType = strtoupper(trim((string) ($row->appl_type ?? '')));
+
+                    $type = in_array($applType, ['N', 'R', 'D', 'A'], true)
+                        ? $applType
+                        : null;
+
+                    if ($type === null) {
+                        continue;
+                    }
+                    $cnt = (int) ($row->cnt ?? 0);
+
+                    foreach ($contractorFormToIds[$formCode] as $licId) {
+                        if (! isset($completedCountsMap[$licId])) {
+                            $completedCountsMap[$licId] = ['N' => 0, 'R' => 0, 'D' => 0, 'A' => 0];
+                        }
+
+                        $completedCountsMap[$licId][$type] += $cnt;
+                    }
+                }
+            }
+        }
+
+        $assignedForms = $assignedRows->flatMap(function ($row) use ($licences) {
+            $type = $row->form_type;
+            return collect($row->form_id)->map(function ($id) use ($type, $licences) {
+                $id = (int) $id;
+                $lic = $licences->get($id);
+                return [
+                    'id' => $id,
+                    'form_name' => $lic->form_name ?? null,
+                    'licence_name' => $lic->licence_name ?? null,
+                    'form_code' => $lic->form_code ?? null,
+                    'color_code' => $lic->color_code ?? null,
+                    'category_id' => $lic->category_id ?? null,
+                ];
+            });
+        })->values();
+
+        $assignedFormSummary = $assignedForms->groupBy('id')->map(function ($items) use ($completedCountsMap) {
+            $first = $items->first();
+            $fid = $first['id'];
+            $counts = $completedCountsMap[$fid] ?? ['N' => 0, 'R' => 0, 'D' => 0, 'A' => 0];
+            return [
+                'id' => $fid,
+                'form_name' => $first['form_name'],
+                'licence_name' => $first['licence_name'],
+                'form_code' => $first['form_code'],
+                'color_code' => $first['color_code'],
+                'category_id' => $first['category_id'],
+                'completed_new_count' => $counts['N'],
+                'completed_renewal_count' => $counts['R'],
+                'completed_digi_count' => $counts['D'],
+                'completed_alteration_count' => $counts['A'],
+            ];
+        })->values()->all();
+
+        $formColors = [
+            'C'  => 'bg-yellow',
+            'B'  => 'bg-red',
+            'H'  => 'bg-H',
+            'P'  => 'bg-green',
+            'EA' => 'bg-thickgreen',
+            'EB' => 'bg-dark',
+            'ESA' => 'bg-thickblue',
+            'ESB' => 'bg-gray',
+        ];
+// dd($assignedFormSummary); exit;
+        $summaryCollection = collect($assignedFormSummary);
+        $contractorCardsCollection = $summaryCollection->filter(function ($item) use ($contractorCategoryIds) {
+            if (!empty($contractorCategoryIds)) {
+                return in_array((int) ($item['category_id'] ?? 0), $contractorCategoryIds, true);
+            }
+            return strpos(mb_strtolower($item['licence_name'] ?? ''), 'contractor') !== false;
+        })->values();
+        $contractorIds = $contractorCardsCollection->pluck('id')->all();
+
+        $amendmentCardsCollection = $summaryCollection
+            ->reject(fn($item) => in_array($item['id'], $contractorIds, true))
+            ->filter(function ($item) use ($amendmentCategoryIds) {
+                if (empty($amendmentCategoryIds)) {
+                    return strpos(mb_strtolower($item['licence_name'] ?? ''), 'amend') !== false;
+                }
+                return in_array((int) ($item['category_id'] ?? 0), $amendmentCategoryIds, true);
+            })->values();
+        $amendmentIds = $amendmentCardsCollection->pluck('id')->all();
+        $competencyCardsCollection = $summaryCollection->reject(function ($item) use ($contractorIds, $amendmentIds) {
+            return in_array($item['id'], array_merge($contractorIds, $amendmentIds), true);
+        })->values();
+
+        $competencyCards = $competencyCardsCollection->all();
+
+        $contractorCards = $contractorCardsCollection->all();
+        $amendmentCards = $amendmentCardsCollection->all();
+
+        return view('admin.dashboard.completed_applications', compact(
+            'staff',
+            'competencyCards',
+            'contractorCards',
+            'amendmentCards',
+            'formColors'
+        ));
+    }
+
+    /**
+     * AJAX: return completed applications list for Completed Applications dashboard table.
+     * Filters by form_id (mst_licences.id) and returns unified rows across tables.
+     */
+
+    public function completedApplicationsData(Request $request)
+{
+    // dd($request->all()); exit;
+
+    $staff = Auth::user();
+
+    if (!$staff) {
+        return response()->json([
+            'message' => 'Unauthorized'
+        ], 403);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Form ID
+    |--------------------------------------------------------------------------
+    */
+    $formId = (int) $request->query('form_id', 0);
+
+    if ($formId <= 0) {
+        return response()->json([
+            'data' => []
+        ]);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Application Type
+    | N = New
+    | R = Renewal
+    | D = Digitization
+    | A = Alteration
+    |--------------------------------------------------------------------------
+    */
+    $formTypeFilter = strtoupper(
+        trim((string) $request->query('form_type', ''))
+    );
+
+    $applyApplTypeFilter = in_array(
+        $formTypeFilter,
+        ['N', 'R', 'D', 'A'],
+        true
+    );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Application Type Filter
+    |--------------------------------------------------------------------------
+    | Handles database values like:
+    |
+    | D
+    | D
+    |  D
+    |
+    | by using TRIM + UPPER.
+    |--------------------------------------------------------------------------
+    */
+    $applyApplTypeScope = function (
+        $query,
+        string $tableAlias
+    ) use (
+        $applyApplTypeFilter,
+        $formTypeFilter
+    ) {
+        if (!$applyApplTypeFilter) {
+            return;
+        }
+
+        $col = $tableAlias . '.appl_type';
+
+        $query->whereRaw(
+            "UPPER(TRIM(COALESCE($col, ''))) = ?",
+            [$formTypeFilter]
+        );
+    };
+
+    /*
+    |--------------------------------------------------------------------------
+    | Security:
+    | Only allow forms assigned to logged-in staff
+    |--------------------------------------------------------------------------
+    */
+    $assignedFormsQuery = \App\Models\Admin\StaffAssigned::where(
+        'user_id',
+        $staff->id
+    )
+        ->where('is_active', 1)
+        ->whereIn('form_type', ['N', 'R', 'D', 'A']);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Check JSON form_id
+    |--------------------------------------------------------------------------
+    */
+    if (DB::getDriverName() === 'pgsql') {
+
+        $assignedFormsQuery->whereRaw(
+            "jsonb_array_length(COALESCE(form_id, '[]'::jsonb)) > 0"
+        );
+
+    } else {
+
+        $assignedFormsQuery->whereRaw(
+            'JSON_LENGTH(form_id) > 0'
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Get assigned form IDs
+    |--------------------------------------------------------------------------
+    */
+    $assignedFormIDs = $assignedFormsQuery
+        ->get(['form_id'])
+        ->pluck('form_id')
+        ->flatten()
+        ->map(fn($id) => (int) $id)
+        ->unique()
+        ->values()
+        ->all();
+
+    /*
+    |--------------------------------------------------------------------------
+    | Security check
+    |--------------------------------------------------------------------------
+    */
+    if (!in_array($formId, $assignedFormIDs, true)) {
+
+        return response()->json([
+            'message' => 'Forbidden'
+        ], 403);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Get licence master record
+    |--------------------------------------------------------------------------
+    */
+    $licence = DB::table('mst_licences')
+        ->where('id', $formId)
+        ->first();
+
+    $formCode = $licence
+        ? strtoupper(trim((string) ($licence->cert_licence_code ?? '')))
+        : '';
+
+    /*
+    |--------------------------------------------------------------------------
+    | Initialise rows
+    |--------------------------------------------------------------------------
+    */
+    $rows = collect();
+
+    /*
+    |--------------------------------------------------------------------------
+    | Competency / CC forms
+    |--------------------------------------------------------------------------
+    */
+    $ccAdminQuery = app(
+        CompetencyAdminQueryService::class
+    );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Contractor form tables
+    |--------------------------------------------------------------------------
+    */
+    $contractorTablesByCode = [
+
+        'EA' => 'ccl_forma_meta',
+
+        'SA' => 'tnelb_esa_applications',
+
+        'B' => 'tnelb_eb_applications',
+
+        'SB' => 'tnelb_esb_applications',
+    ];
+
+    /*
+    |--------------------------------------------------------------------------
+    | CASE 1:
+    | Competency Certificate forms
+    |--------------------------------------------------------------------------
+    */
+    if ($ccAdminQuery->isCcMetaFormId($formId)) {
+
+        $applTypeFilter = $applyApplTypeFilter
+            ? $formTypeFilter
+            : null;
+
+        $rows = $ccAdminQuery->completedApplications(
+            $formId,
+            $applTypeFilter
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | CASE 2:
+    | Contractor forms
+    |--------------------------------------------------------------------------
+    */
+    elseif (
+        isset($contractorTablesByCode[$formCode])
+        && Schema::hasTable($contractorTablesByCode[$formCode])
+    ) {
+
+        $tbl = $contractorTablesByCode[$formCode];
+
+        /*
+        |--------------------------------------------------------------------------
+        | Base query
+        |--------------------------------------------------------------------------
+        */
+        $query = DB::table($tbl . ' as ta')
+            ->where('ta.application_status', 'A');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Application Type Filter
+        |--------------------------------------------------------------------------
+        */
+        $applyApplTypeScope(
+            $query,
+            'ta'
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | FORM A / EA
+        |--------------------------------------------------------------------------
+        | Licence details are stored in cl_forma_lic.
+        |--------------------------------------------------------------------------
+        */
+        if (
+            $formCode === 'EA'
+            && Schema::hasTable('cl_forma_lic')
+        ) {
+
+            /*
+            |--------------------------------------------------------------------------
+            | Join latest/active licence
+            |--------------------------------------------------------------------------
+            */
+            $query->leftJoin(
+                'cl_forma_lic as lic',
+                function ($join) {
+
+                    $join->on(
+                        'lic.application_id',
+                        '=',
+                        'ta.application_id'
+                    )
+                    ->where(
+                        'lic.cert_status',
+                        '=',
+                        'A'
+                    );
+                }
+            );
+
+            /*
+            |--------------------------------------------------------------------------
+            | Form A result
+            |--------------------------------------------------------------------------
+            */
+            $rows = $query
+                ->select(
+
+                    'ta.application_id',
+
+                    'ta.applicant_name',
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Trim appl_type
+                    |--------------------------------------------------------------------------
+                    */
+                    DB::raw(
+                        "UPPER(TRIM(COALESCE(ta.appl_type, ''))) as appl_type"
+                    ),
+
+                    'ta.created_at',
+
+                    DB::raw("'A' as status"),
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Licence number
+                    |--------------------------------------------------------------------------
+                    | Prefer cl_forma_lic.
+                    | If not available, fallback to ccl_forma_meta.
+                    |--------------------------------------------------------------------------
+                    */
+                    DB::raw(
+                        "COALESCE(lic.license_number, ta.license_number) as license_number"
+                    ),
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Licence issue date
+                    |--------------------------------------------------------------------------
+                    */
+                    'lic.dateof_issue as issued_at',
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Licence validity from
+                    |--------------------------------------------------------------------------
+                    */
+                    'lic.valid_from as valid_from',
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Licence validity to
+                    |--------------------------------------------------------------------------
+                    */
+                    'lic.valid_to as expires_at',
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Form name
+                    |--------------------------------------------------------------------------
+                    */
+                    DB::raw(
+                        'TRIM(ta.form_name) as form_name'
+                    )
+                )
+                ->orderByDesc('ta.updated_at')
+                ->get();
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Other contractor forms
+        |--------------------------------------------------------------------------
+        */
+        else {
+
+            $rows = $query
+                ->select(
+
+                    'ta.application_id',
+
+                    'ta.applicant_name',
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Trim appl_type
+                    |--------------------------------------------------------------------------
+                    */
+                    DB::raw(
+                        "UPPER(TRIM(COALESCE(ta.appl_type, ''))) as appl_type"
+                    ),
+
+                    'ta.created_at',
+
+                    DB::raw("'A' as status"),
+
+                    'ta.license_number',
+
+                    DB::raw(
+                        'NULL as issued_at'
+                    ),
+
+                    DB::raw(
+                        'NULL as valid_from'
+                    ),
+
+                    DB::raw(
+                        'NULL as expires_at'
+                    ),
+
+                    DB::raw(
+                        'TRIM(ta.form_name) as form_name'
+                    )
+                )
+                ->orderByDesc('ta.updated_at')
+                ->get();
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Convert rows to API response
+    |--------------------------------------------------------------------------
+    */
+    $data = collect($rows)
+        ->values()
+        ->map(function ($r, $idx) use ($formCode) {
+
+            /*
+            |--------------------------------------------------------------------------
+            | Application ID
+            |--------------------------------------------------------------------------
+            */
+            $applicationId = $r->application_id ?? '';
+
+            /*
+            |--------------------------------------------------------------------------
+            | Detail page URL
+            |--------------------------------------------------------------------------
+            */
+            if ($formCode === 'EA') {
+
+                $viewUrl = route(
+                    'admin.applicants_detail_forma_completed',
+                    [
+                        'applicant_id' => $applicationId
+                    ]
+                );
+
+            } else {
+
+                $viewUrl = route(
+                    'admin.view_completed_application',
+                    [
+                        'applicant_id' => $applicationId
+                    ]
+                );
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Status
+            |--------------------------------------------------------------------------
+            */
+            $statusText = strtoupper(
+                trim((string) ($r->status ?? ''))
+            ) === 'A'
+                ? 'Completed'
+                : (string) ($r->status ?? '');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Application Type
+            |--------------------------------------------------------------------------
+            */
+            $applType = strtoupper(
+                trim((string) ($r->appl_type ?? ''))
+            );
+
+            /*
+            |--------------------------------------------------------------------------
+            | Return row
+            |--------------------------------------------------------------------------
+            */
+            return [
+
+                'sno' => $idx + 1,
+
+                'application_id' => (string) $applicationId,
+
+                'applicant_name' => (string) (
+                    $r->applicant_name ?? ''
+                ),
+
+                'appl_type' => $applType,
+
+                'applied_on' => (string) (
+                    $r->created_at ?? ''
+                ),
+
+                'status' => $statusText,
+
+                /*
+                |--------------------------------------------------------------------------
+                | Licence number
+                |--------------------------------------------------------------------------
+                */
+                'license_number' => (string) (
+                    $r->license_number ?? ''
+                ),
+
+                /*
+                |--------------------------------------------------------------------------
+                | Date of issue
+                |--------------------------------------------------------------------------
+                */
+                'issued_at' => (string) (
+                    $r->issued_at ?? ''
+                ),
+
+                /*
+                |--------------------------------------------------------------------------
+                | Valid from
+                |--------------------------------------------------------------------------
+                */
+                'valid_from' => (string) (
+                    $r->valid_from ?? ''
+                ),
+
+                /*
+                |--------------------------------------------------------------------------
+                | Valid to
+                |--------------------------------------------------------------------------
+                */
+                'expires_at' => (string) (
+                    $r->expires_at ?? ''
+                ),
+
+                /*
+                |--------------------------------------------------------------------------
+                | Detail URL
+                |--------------------------------------------------------------------------
+                */
+                'license_url' => $viewUrl,
+
+                /*
+                |--------------------------------------------------------------------------
+                | Form name
+                |--------------------------------------------------------------------------
+                */
+                'form_name' => strtoupper(
+                    trim((string) ($r->form_name ?? ''))
+                ),
+
+                /*
+                |--------------------------------------------------------------------------
+                | Form code
+                |--------------------------------------------------------------------------
+                */
+                'form_code' => $formCode,
+            ];
+        })
+        ->all();
+
+    /*
+    |--------------------------------------------------------------------------
+    | Return JSON
+    |--------------------------------------------------------------------------
+    */
+    return response()->json([
+        'data' => $data
+    ]);
+}
+    public function completedApplicationsData_old(Request $request)
+    {
+
+    // dd($request->all()); exit;
+
+        $staff = Auth::user();
+        if (!$staff) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $formId = (int) $request->query('form_id', 0);
+        if ($formId <= 0) {
+            return response()->json(['data' => []]);
+        }
+
+        $formTypeFilter = strtoupper(trim((string) $request->query('form_type', '')));
+        $applyApplTypeFilter = in_array($formTypeFilter, ['N', 'R', 'D', 'A'], true);
+
+        $applyApplTypeScope = function ($query, string $tableAlias) use ($applyApplTypeFilter, $formTypeFilter) {
+            if (!$applyApplTypeFilter) {
+                return;
+            }
+            $col = $tableAlias . '.appl_type';
+            $query->whereRaw('UPPER(TRIM(COALESCE(' . $col . ", ''))) = ?", [$formTypeFilter]);
+        };
+
+        // Security: only allow forms assigned to this staff
+        $assignedFormsQuery = \App\Models\Admin\StaffAssigned::where('user_id', $staff->id)
+            ->where('is_active', 1)
+            ->whereIn('form_type', ['N', 'R']);
+
+        if (DB::getDriverName() === 'pgsql') {
+            $assignedFormsQuery->whereRaw("jsonb_array_length(COALESCE(form_id, '[]'::jsonb)) > 0");
+        } else {
+            $assignedFormsQuery->whereRaw('JSON_LENGTH(form_id) > 0');
+        }
+
+        $assignedFormIDs = $assignedFormsQuery->get(['form_id'])
+            ->pluck('form_id')
+            ->flatten()
+            ->map(fn($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (!in_array($formId, $assignedFormIDs, true)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $licence = DB::table('mst_licences')->where('id', $formId)->first();
+        $formCode = $licence ? strtoupper((string) ($licence->cert_licence_code ?? '')) : '';
+
+        $rows = collect();
+        $ccAdminQuery = app(CompetencyAdminQueryService::class);
+        $contractorTablesByCode = [
+            'EA' => 'ccl_forma_meta',
+            'SA' => 'tnelb_esa_applications',
+            'B'  => 'tnelb_eb_applications',
+            'SB' => 'tnelb_esb_applications',
+        ];
+
+        if ($ccAdminQuery->isCcMetaFormId($formId)) {
+            $applTypeFilter = $applyApplTypeFilter ? $formTypeFilter : null;
+            $rows = $ccAdminQuery->completedApplications($formId, $applTypeFilter);
+        } elseif (isset($contractorTablesByCode[$formCode]) && Schema::hasTable($contractorTablesByCode[$formCode])) {
+            $tbl = $contractorTablesByCode[$formCode];
+            $query = DB::table($tbl . ' as ta')
+                ->where('ta.application_status', 'A');
+            $applyApplTypeScope($query, 'ta');
+            $rows = $query->select(
+                'ta.application_id',
+                'ta.applicant_name',
+                'ta.appl_type',
+                'ta.created_at',
+                DB::raw("'A' as status"),
+                'ta.license_number',
+                DB::raw('NULL as issued_at'),
+                DB::raw('NULL as expires_at'),
+                DB::raw('ta.form_name as form_name')
+            )
+                ->orderByDesc('ta.updated_at')
+                ->get();
+        }
+
+        // dd($rows);
+
+        $data = collect($rows)->values()->map(function ($r, $idx) use ($formCode) {
+            $applicationId = $r->application_id ?? '';
+            if ($formCode == 'EA') {
+                // dd('111');exit;
+                $viewUrl = route('admin.applicants_detail_forma_completed', ['applicant_id' => $applicationId]);
+            } else {
+                $viewUrl = route('admin.view_completed_application', ['applicant_id' => $applicationId]);
+            }
+            $statusText = strtoupper((string) ($r->status ?? '')) === 'A' ? 'Completed' : (string) ($r->status ?? '');
+
+            return [
+                'sno' => $idx + 1,
+                'application_id' => (string) $applicationId,
+                'applicant_name' => (string) ($r->applicant_name ?? ''),
+                'appl_type' => (string) ($r->appl_type ?? ''),
+                'applied_on' => (string) ($r->created_at ?? ''),
+                'status' => $statusText,
+                'license_number' => (string) ($r->license_number ?? ''),
+                'issued_at' => (string) ($r->issued_at ?? ''),
+                'expires_at' => (string) ($r->expires_at ?? ''),
+                'license_url' => $viewUrl,
+                'form_name' => (string) ($r->form_name ?? ''),
+                'form_code' => (string) $formCode,
+            ];
+        })->all();
+
+        return response()->json(['data' => $data]);
+    }
+
+    /**
+     * Digitisation dependency panel for completed applications (admin).
+     */
+    public function applicationTimeline(string $application_id)
+    {
+        $validate = Validator::make(['application_id' => $application_id], [
+            'application_id' => 'required|string|max:20',
+        ]);
+        if ($validate->fails()) {
+            return response()->json(['message' => $validate->errors()->first()], 422);
+        }
+
+        $application_id = trim($application_id);
+        if ($application_id === '') {
+            return response()->json(['message' => 'Application ID is required.'], 422);
+        }
+
+        $application = DB::table('cc_form_s_meta')->where('application_id', $application_id)->first();
+        if (! $application) {
+            $metaTable = app(CompetencyMetaService::class)->metaTableForApplicationId($application_id);
+            if ($metaTable) {
+                $application = DB::table($metaTable)->where('application_id', $application_id)->first();
+            }
+        }
+
+
+        if ($application->appl_type == 'A' && $application->old_application != '') {
+            $application_id = $application->old_application;
+        }
+
+        $getdetails_digitisation = DB::table('tnelb_cc_digitization')->where('application_id', $application_id)->first();
+        $get_digitisation_mapping = DB::table('cc_digitisation_map')->where('application_id', $application_id)->first();
+        $get_till_date_exp = CC_Experience::where('application_id', $application_id)
+            ->where('work_to_till_date', 1)
+            ->first();
+
+        $check_releaved = CC_Experience::where('application_id', $application->appl_type == 'A' ? $application->application_id : $application_id)
+            ->where('work_to_till_date', 0)
+            ->exists();
+
+        $get_issued_certificate = CC_Forms_cert::where('application_id', $application_id)->first();
+
+        if (! $application) {
+            return response()->json(['message' => 'Application not found.'], 404);
+        }
+
+        $timeline = app(DashboardApplicationTimeline::class)->build($application_id, $application);
+
+        return view('user_login.partials.dashboard-application-timeline', compact(
+            'application',
+            'timeline',
+            'getdetails_digitisation',
+            'get_digitisation_mapping',
+            'get_till_date_exp',
+            'get_issued_certificate',
+            'check_releaved'
+        ));
+    }
+
+    public function getForms($form_id)
+    {
+        return DB::table('tnelb_forms')
+            ->where('id', $form_id) // Filter by Form S
+            ->select('*')
+            ->first();
+    }
+
+    public function logout()
+    {
+        Auth::logout();
+        return redirect()->route('admin.index')->with('a', 'Logged out successfully');
+    }
+
+
+
+    public function getApplicantDetails(Request $request)
+    {
+        $applicationId = $request->application_id;
+
+        // Debugging: Log the received application ID
+        Log::info('Fetching details for Application ID: ' . $applicationId);
+
+        // Fetch single applicant data
+        $applicant = DB::table('tnelb_application_tbl')
+            ->where('application_id', $applicationId)
+            ->first(); // Fetch only one record
+
+        if (!$applicant) {
+            return response()->json(['error' => 'No data found'], 404);
+        }
+
+        return response()->json([
+            'applicant_id' => $applicant->application_id,
+            'applicant_name' => $applicant->applicant_name,
+            'fathers_name' => $applicant->fathers_name,
+            'applicants_address' => $applicant->applicants_address,
+            'd_o_b' => $applicant->d_o_b,
+            'age' => $applicant->age,
+            // 'checklist' => $applicant->checklist,
+            // 'process' => $applicant->process
+        ]);
+    }
+
+
+
+    public function showApplicantDetails_bk_27042026($applicant_id)
+    {
+
+        $returnForwardUser = null;
+        // Fetch applicant details
+        $applicant = DB::table('tnelb_application_tbl')
+            ->join('cc_payments', 'tnelb_application_tbl.application_id', '=', 'payments.application_id')
+            ->where('tnelb_application_tbl.application_id', $applicant_id)
+            ->select('tnelb_application_tbl.*', 'payments.*')
+            ->first();
+
+
+
+
+        if (!$applicant) {
+            return abort(403, 'Applicant not found');
+        }
+
+
+        if ($applicant->appl_type == "R") {
+
+            // $ids = [$applicant->old_application, $applicant_id];
+
+            // Fetch educational qualifications
+            $educationalQualifications = DB::table('tnelb_applicants_edu')
+                ->where('application_id', $applicant_id)
+                ->get();
+
+            // Fetch work experience
+            $workExperience = DB::table('tnelb_applicants_exp')
+                ->where('application_id', $applicant_id)
+                ->get();
+
+            // Fetch documents
+            $documents = Schema::hasTable('mst_documents')
+                ? DB::table('mst_documents')->where('application_id', $applicant_id)->get()
+                : collect([]);
+
+            // Get the last uploaded photo (if available)
+            $uploadedPhoto = TnelbApplicantPhoto::where('application_id', $applicant_id)
+                ->whereNotNull('upload_path')
+                ->orderByDesc('id')
+                ->first();
+
+        } else {
+
+            // Fetch educational qualifications
+            $educationalQualifications = DB::table('tnelb_applicants_edu')
+                ->where('application_id', $applicant_id)
+                ->orderBy('year_of_passing', 'desc')
+                ->get();
+
+            // Fetch work experience
+            $workExperience = DB::table('tnelb_applicants_exp')
+                ->where('application_id', $applicant_id)
+                ->get();
+
+            // Fetch documents
+            $documents = Schema::hasTable('mst_documents')
+                ? DB::table('mst_documents')->where('application_id', $applicant_id)->get()
+                : collect([]);
+
+            // Get the last uploaded photo (if available)
+            $uploadedPhoto = TnelbApplicantPhoto::where('application_id', $applicant_id)
+                ->whereNotNull('upload_path')
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        // Get the last uploaded signature (common for all forms)
+        $uploadedSign = TnelbApplicantsSign::where('application_id', $applicant_id)
+            ->whereNotNull('uploaded_doc')
+            ->orderByDesc('id')
+            ->first();
+
+        // Get the current user's role ID
+        $staff = Auth::user();
+
+        if (!$staff || !$staff->roles_id) {
+            return abort(403, 'Unauthorized');
+        }
+
+        // Fetch next role dynamically from the roles table
+        if (in_array($staff->name, ["Supervisor", "Supervisor2"])) {
+
+            if ($applicant->status == 'RE') {
+
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Secretary')
+                    ->select('name', 'roles_id')
+                    ->first();
+            } else {
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Assistant Secretary')
+                    ->select('name', 'roles_id')
+                    ->first();
+            }
+        }
+
+
+        if ($staff->name === "Assistant Secretary") {
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+        if ($staff->name === "Secretary") {
+
+            if ($applicant->form_id == 1) {
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'President')
+                    ->select('name', 'roles_id')
+                    ->first();
+
+                $returnForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Supervisor')
+                    ->select('name', 'roles_id')
+                    ->first();
+            } else {
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Secretary')
+                    ->select('name', 'roles_id')
+                    ->first();
+
+                $returnForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Supervisor')
+                    ->select('name', 'roles_id')
+                    ->first();
+            }
+        }
+
+        if ($staff->name === "President") {
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'President')
+                ->select('roles_id', 'name')
+                ->first();
+
+            $returnForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Supervisor')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+
+        $user_entry = DB::table('tnelb_application_tbl')
+            ->where('application_id', $applicant_id) // Filter by specific application
+            ->select('*')
+            ->first();
+
+        $workflows = $this->queryCompetencyWorkflowsWithReturnApplicantLog(
+            $applicant_id,
+            ['mst_roles.role_name', 'tnelb_application_tbl.form_name', 'tnelb_application_tbl.license_name'],
+            true,
+            true
+        );
+
+        $workflows1 = DB::table('mst__roles')
+            ->select('*')
+            ->get();
+
+
+        $queries = DB::table('tnelb_query_applicable as qa')
+            ->leftJoin('tnelb_application_tbl as ta', 'qa.application_id', '=', 'ta.application_id')
+            ->where('qa.application_id', $applicant_id)
+            ->where('qa.query_status', 'P')
+            ->select('qa.*')
+            ->orderByDesc('qa.id')
+            ->get();
+
+        // Determine view based on user role
+        $view = match ($staff->name) {
+            'President'  => 'admin.dashboard.applicants_detail_supervisor',
+            // 'President'  => 'admin.dashboard.applicants_detail_president',
+            // 'Secretary'  => 'admin.dashboard.applicants_detail',
+            'Secretary'  => 'admin.dashboard.applicants_detail_supervisor',
+            'Supervisor' => 'admin.dashboard.applicants_detail_supervisor',
+            'Supervisor2' => 'admin.dashboard.applicants_detail_supervisor',
+            'Assistant Secretary'    => 'admin.dashboard.applicants_detail_auditor',
+
+            default      => abort(403, 'Unauthorized'),
+        };
+
+
+        return view($view, compact('applicant', 'educationalQualifications', 'workExperience', 'uploadedPhoto', 'uploadedSign', 'documents', 'nextForwardUser', 'returnForwardUser', 'workflows', 'queries', 'user_entry', 'staff'));
+    }
+
+
+    // showApplicantDetails
+    public function showApplicantDetails($applicant_id)
+    {
+
+        $returnForwardUser = null;
+        $appService = app(CompetencyApplicationService::class);
+        $applicant = $appService->findApplicantWithPayment($applicant_id);
+
+
+        if (!$applicant) {
+            return abort(403, 'Applicant not found');
+        }
+
+
+
+        $alterationProofs = collect();
+        $formSWorkflowAppPk = null;
+        $formSMasterWorkflowAppPk = null;
+        $parentApplicantForAlter = null;
+        $formName = strtoupper((string) ($applicant->form_name ?? ''));
+
+
+        if (CompetencyDocumentSupport::usesVersionedStorage($formName)) {
+
+            $workflowApp = CC_Forms_Meta::findByApplicationId($applicant_id);
+            if ($workflowApp) {
+                $reviewContext = app(CompetencyDocumentReviewService::class)->buildStaffReviewContext($workflowApp);
+                $educationalQualifications = $reviewContext['educationalQualifications'];
+                $workExperience = $reviewContext['workExperience'];
+                $uploadedPhoto = $reviewContext['uploadedPhoto'];
+                $uploadedSign = $reviewContext['uploadedSign'];
+                $alterationProofs = $reviewContext['alterationProofs'];
+                $formSWorkflowAppPk = (int) $workflowApp->app_id;
+                $parentApp = $reviewContext['parentApplication'] ?? null;
+                $formSMasterWorkflowAppPk = $parentApp ? (int) $parentApp->app_id : null;
+                if ($applicant->appl_type == 'A') {
+                    $parentApplicantForAlter = $parentApp;
+                    if ($parentApplicantForAlter) {
+                        $parentApplicantForAlter->applicants_address = $parentApplicantForAlter->applicants_address
+                            ?? $parentApplicantForAlter->applicant_address
+                            ?? null;
+                        $parentApplicantForAlter->applicant_name = $parentApplicantForAlter->applicant_name
+                            ?? $parentApplicantForAlter->applicants_name
+                            ?? null;
+                    }
+                    if (!$parentApplicantForAlter && !empty($applicant->old_application)) {
+                        $parentApplicantForAlter = DB::table('tnelb_application_tbl')
+                            ->where('application_id', $applicant->old_application)
+                            ->first();
+                    }
+                }
+            } else {
+                $educationalQualifications = collect();
+                $workExperience = collect();
+                $uploadedPhoto = null;
+                $uploadedSign = null;
+            }
+        }
+
+        // Get the current user's role ID
+        $staff = Auth::user();
+
+        if (!$staff || !$staff->roles_id) {
+            return abort(403, 'Unauthorized');
+        }
+
+
+
+        // Fetch next role dynamically from the roles table
+        if (in_array($staff->name, ["Supervisor", "Supervisor2"])) {
+
+            $nextForwardUser = DB::table('mst_login_users')
+                ->where('user_name', 'assistantsecretary')
+                ->select('user_name as name', 'role_id as roles_id')
+                ->first();
+        }
+
+
+        if ($staff->name === "Assistant Secretary") {
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+            $returnForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Supervisor')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+        if ($staff->name === "Secretary") {
+
+            if ($applicant->form_id == 1) {
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'President')
+                    ->select('name', 'roles_id')
+                    ->first();
+
+                $returnForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Supervisor')
+                    ->select('name', 'roles_id')
+                    ->first();
+            } else {
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Secretary')
+                    ->select('name', 'roles_id')
+                    ->first();
+
+                $returnForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Supervisor')
+                    ->select('name', 'roles_id')
+                    ->first();
+            }
+        }
+
+        if ($staff->name === "President") {
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'President')
+                ->select('roles_id', 'name')
+                ->first();
+
+            $returnForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Supervisor')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+        $user_entry = $appService->findApplicantWithPayment($applicant_id)
+            ?? DB::table('tnelb_application_tbl')->where('application_id', $applicant_id)->first();
+
+        $workflows = $this->queryCompetencyWorkflowsWithReturnApplicantLog(
+            $applicant_id,
+            ['app_tbl.form_name'],
+            true,
+            true
+        );
+
+        $workflows1 = DB::table('mst__roles')
+            ->select('*')
+            ->get();
+
+
+        $queries = DB::table('tnelb_query_applicable as qa')
+            ->leftJoin('tnelb_application_tbl as ta', 'qa.application_id', '=', 'ta.application_id')
+            ->where('qa.application_id', $applicant_id)
+            ->where('qa.query_status', 'P')
+            ->select('qa.*')
+            ->orderByDesc('qa.id')
+            ->get();
+
+        $cc_digitization = Tnelb_CC_Digitization::where('application_id', $applicant_id)
+            ->orderByDesc('id')
+            ->first();
+
+        $checklist = DB::table('mst_checklists as mc')
+            ->join('mst_licences as ml', 'ml.id', '=', 'mc.cert_license_id')
+            ->where('ml.cert_licence_code', $applicant->license_name)
+            ->where('mc.appl_type', $applicant->appl_type)
+            ->where('mc.status', 1)
+            ->select(
+                'mc.*',
+                'ml.licence_name',
+                'ml.cert_licence_code'
+            )
+            ->get();
+
+        if (($applicant->appl_type ?? '') === 'A' && empty($parentApplicantForAlter) && !empty($applicant->old_application)) {
+            $parentApplicantForAlter = CC_Forms_Meta::findByApplicationId((string) $applicant->old_application)
+                ?? DB::table('tnelb_application_tbl')
+                ->where('application_id', $applicant->old_application)
+                ->first();
+        }
+
+        if (in_array((string) ($applicant->appl_type ?? ''), ['A', 'R', 'D'], true)) {
+            app(CompetencyQcQscService::class)->overlayOnApplicant($applicant);
+        }
+
+        $Existingchecklist = CC_Checklist_applicant::where('applicant_id', $applicant_id)
+            ->where('certificate_name', $applicant->certificate_name)
+            ->first();
+
+        $checkedList_1 = [];
+        $verifyList = [];
+
+        if ($Existingchecklist && $Existingchecklist->checklist_json) {
+
+            $json = json_decode($Existingchecklist->checklist_json, true);
+
+            foreach ($json as $row) {
+
+                $checkedList_1[$row['id']] = $row['checked'];
+                $verifyList[$row['id']]  = $row['verify'];
+            }
+        }
+
+        // Determine view based on user role
+        $view = match ($staff->name) {
+            'President'  => 'admin.dashboard.applicants_detail_supervisor',
+            'Secretary'  => 'admin.dashboard.applicants_detail_supervisor',
+            'Supervisor' => 'admin.dashboard.applicants_detail_supervisor',
+            'Supervisor2' => 'admin.dashboard.applicants_detail_supervisor',
+            'Assistant Secretary' => 'admin.dashboard.applicants_detail_supervisor',
+
+            default      => abort(403, 'Unauthorized'),
+        };
+
+        return view($view, compact(
+            'applicant',
+            'educationalQualifications',
+            'workExperience',
+            'uploadedPhoto',
+            'uploadedSign',
+            'nextForwardUser',
+            'returnForwardUser',
+            'workflows',
+            'queries',
+            'user_entry',
+            'staff',
+            'cc_digitization',
+            'checklist',
+            'alterationProofs',
+            'formSWorkflowAppPk',
+            'formSMasterWorkflowAppPk',
+            'parentApplicantForAlter',
+            // 'checklist',
+            'checkedList_1',
+            'verifyList'
+        ));
+    }
+
+    public function presidentDashboard()
+    {
+        // Count applications based on status
+        $applicationCounts = DB::table('tnelb_application_tbl')
+            ->select(
+                'form_id',
+                DB::raw("SUM(CASE WHEN status = 'C' THEN 1 ELSE 0 END) AS completed"),
+                DB::raw("SUM(CASE WHEN status = 'P' THEN 1 ELSE 0 END) AS pending"),
+                DB::raw("SUM(CASE WHEN status = 'H' THEN 1 ELSE 0 END) AS on_hold"),
+                DB::raw("SUM(CASE WHEN status = 'R' THEN 1 ELSE 0 END) AS rejected")
+            )
+            ->groupBy('form_id')
+            ->get();
+
+        return view('admin.dashboard.president_dashboard', compact('applicationCounts'));
+    }
+
+
+
+    public function secretary_table()
+    {
+        $workflows = DB::table('mst_workflows as mw')
+            ->join('tnelb_application_tbl as ta', 'mw.application_id', '=', 'ta.application_id') // Join condition
+            ->select('mw.*', 'ta.applicant_name') // Select fields
+            ->get();
+        return view('admin.dashboard.secretary_table', compact('workflows'));
+        // return view('dashboard.secretary_table');
+    }
+
+    /**
+     * Get the processing code based on user role.
+     */
+    private function getProcessedByRole($roleName)
+    {
+        return match ($roleName) {
+            'President'  => 'PR',
+            'Secretary'  => 'SE',
+            'Supervisor' => 'S',
+            'Supervisor2' => 'S',
+            'Assistant Secretary'    => 'A',
+            default      => abort(403, 'Unauthorized'),
+        };
+    }
+
+
+
+
+    // -----------------form A -------------------
+
+
+    // -----------------form A -------------------
+    public function applicants_detail_forma($applicant_id)
+    {
+
+        $returnForwardUser = null;
+
+        $staff = Auth::user();
+
+        if (!$staff || !$staff->roles_id) {
+            return abort(403, 'Unauthorized');
+        }
+
+        $applicantQuery1 = DB::table('ccl_forma_meta')
+            ->leftJoin('payments', 'ccl_forma_meta.application_id', '=', 'payments.application_id')
+            ->where('ccl_forma_meta.application_id', $applicant_id)
+            ->select(
+                'ccl_forma_meta.*',
+                'payments.transaction_id',
+                'payments.payment_status',
+                'payments.amount',
+                'payments.payment_mode',
+                'payments.created_at as payment_date',
+                'payments.application_fee',
+                'payments.late_fee',
+            );
+
+        $applicant = $applicantQuery1
+            // ->unionAll($applicantQuery2)
+            ->orderByDesc('dt_submit')
+            ->first();
+
+        $appl_type = trim($applicant->appl_type);
+
+        if ($appl_type === 'R') {
+            $old_issuedat = DB::table('cl_forma_lic')
+                ->select('dateof_issue', 'created_at', 'valid_from',  'valid_to')
+                ->where('application_id', $applicant->old_application)
+
+
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            $old_issued_at_date = $old_issuedat->valid_to;
+
+        } else {
+
+            $old_issued_at_date = '0';
+        }
+
+
+        $formname = $applicant->form_name;
+
+        $license_name = DB::table('mst_licences')->where('form_code', $formname)->first();
+
+        $license_name_data = DB::table('mst_licences')->where('cert_licence_code', $applicant->license_name)->first();
+
+        if (!$applicant) {
+            return abort(404, 'Applicant not found');
+        }
+
+        if ($staff->name === "Supervisor") {
+
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Assistant Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+        if ($staff->name === "Supervisor2") {
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Assistant Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+        if ($staff->name === "Assistant Secretary") {
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+        if ($staff->name === "Secretary") {
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'President')
+                ->select('name', 'roles_id')
+                ->first();
+
+            $returnForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Supervisor')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+        if ($staff->name === "President") {
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'President')
+                ->select('name', 'roles_id')
+                ->first();
+
+            $returnForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Supervisor')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+        // psql -U postgres -d arundb_dec01 -p 5432 -f "D:\laravel_program\tnelb-program-arun-dec01\TNelb-Staging\db\latest_v28112025.sql"
+
+        $cl_ownership_table = DB::table('cl_ownership_table')
+            ->where('application_id', $applicant_id)
+            ->orderBy('id', 'Desc')
+            ->where('proprietor_flag', '1')
+            ->get();
+
+        $staffdetails = DB::table('cl_staff_tbl')
+            ->where('application_id', $applicant_id)
+            ->where('staff_flag', '1')
+            ->orderBy('id')
+            ->get();
+        
+        
+
+        $otherstaffdetails = DB::table('cl_staff_tbl')
+            ->where('application_id', $applicant_id)
+            ->whereNotIn('staff_category', ['QC', 'QSC'])
+            ->where('staff_flag', '1')
+            ->orderBy('id')
+            ->get();
+
+        
+
+
+
+        $qcQscStaffs_details = $staffdetails->filter(function ($staff) {
+                return in_array(
+                    strtoupper(trim($staff->staff_category)),
+                    ['QC', 'QSC']
+                );
+            });
+
+
+
+        $showQcWarning = false;
+        $licence_validitystaff = null;
+
+        $licence_name_validitystaff = MstLicence::where('form_code', $formname)->first();
+
+        if ($licence_name_validitystaff && $staffdetails->count() > 0) {
+
+            $today = Carbon::today()->toDateString();
+            $applType = trim($applicant->appl_type);
+
+            $licence_validitystaff = FeesValidity::where(
+                'licence_id',
+                $licence_name_validitystaff->id
+            )
+                ->whereIn('form_type', ['N', 'R', 'D', 'A'])
+                ->where('status', 1)
+                ->whereDate('validity_start_date', '<=', $today)
+                ->orderBy('validity_start_date', 'desc')
+                ->first();
+
+            if ($licence_validitystaff && $licence_validitystaff->validity) {
+
+                $qcQscStaff = $staffdetails
+                    ->filter(function ($staff) {
+                        return in_array(
+                            strtoupper(trim($staff->staff_category)),
+                            ['QC', 'QSC']
+                        );
+                    });
+
+                if ($qcQscStaff->count() > 0) {
+
+                    // Get QC/QSC staff having the maximum validity_to date
+                    $latestQcQscStaff = $qcQscStaff->sortByDesc(function ($staff) {
+                        return Carbon::parse($staff->staff_cc_validity_to);
+                    })->first();
+
+                    $firstQcValidity = Carbon::parse(
+                        $latestQcQscStaff->staff_cc_validity_from
+                    );
+
+                    $licencePeriodEnd = Carbon::now()->addMonths(
+                        (int) $licence_validitystaff->validity
+                    );
+
+                    if ($firstQcValidity->lt($licencePeriodEnd)) {
+                        $showQcWarning = true;
+                    }
+                }
+
+                $licencePeriodEnd = Carbon::now()->addMonths(
+                    (int) $licence_validitystaff->validity
+                );
+
+                if ($firstQcValidity->lt($licencePeriodEnd)) {
+                    $showQcWarning = true;
+                }
+            }
+        }
+
+        $staff = Auth::user();
+        if (!$staff || !$staff->roles_id) {
+            return abort(403, 'Unauthorized');
+        }
+
+        $user_entry = DB::table('ccl_forma_meta')
+            ->where('application_id', $applicant_id)
+            ->select('*')
+
+            ->first();
+
+        $documents = DB::table('tnelb_applicant_doc_A')
+            ->where('application_id', $applicant_id)
+            ->select('*')
+
+            ->first();
+
+        $workflows = DB::table('tnelb_workflow_a')
+            ->leftjoin('ccl_forma_meta', 'tnelb_workflow_a.application_id', '=', 'ccl_forma_meta.application_id')
+            ->leftjoin('mst__roles', 'tnelb_workflow_a.forwarded_to', '=', 'mst__roles.id')
+            ->where('tnelb_workflow_a.application_id', $applicant_id)
+            ->select('tnelb_workflow_a.*', 'mst__roles.name', 'ccl_forma_meta.form_name', 'ccl_forma_meta.license_name')
+            ->orderBy('tnelb_workflow_a.id', 'desc')
+            ->get();
+
+        $queries = DB::table('tnelb_query_applicable as qa')
+            ->leftJoin('ccl_forma_meta as ta', 'qa.application_id', '=', 'ta.application_id')
+            ->where('qa.application_id', $applicant_id)
+            ->where('qa.query_status', 'P')
+            ->select('qa.*')
+            ->first() ?? null;
+
+        $showbankWarning = false;
+
+        $banksolvency = Tnelb_banksolvency_a::where('application_id', $applicant_id)
+            ->where('status', '1')
+            ->first();
+
+        if ($banksolvency && $banksolvency->bank_validity && $licence_validitystaff && $licence_validitystaff->validity) {
+            $bankValidity = Carbon::parse($banksolvency->bank_validity);
+
+            // Licence period (months)
+            $bankvalidityend = Carbon::now()->addMonths((int) $licence_validitystaff->validity);
+
+            if ($bankValidity->lt($bankvalidityend)) {
+                $showbankWarning = true;
+            }
+        }
+
+        // $equipmentlist = Equipment_storetmp_A::where('application_id', $applicant_id)->first();
+
+        $equiplist = Mst_equipment_tbl::where('equip_licence_name', 8)
+            ->where('status', 1)
+            ->orderBy('id')
+            ->get();
+
+        $equipmentlist = DB::table('tnelb_equimentsuser_cl')
+            // ->where('login_id', Auth::user()->login_id)
+            ->where('application_id', $applicant_id)
+            ->get();
+
+        $attachments_cl = DB::table('tnelb_attachments_cl')
+
+            ->where('application_id', $applicant_id)
+            ->get();
+
+        $addressproof = DB::table('tnelb_addressproof_cl')
+
+            ->where('application_id', $applicant_id)
+            ->first();
+
+        
+        $checklist = DB::table('mst_checklists as mc')
+            ->join('mst_licences as ml', 'ml.id', '=', 'mc.cert_license_id')
+            ->where('ml.cert_licence_code', $applicant->license_name)
+            ->where('mc.appl_type', trim($applicant->appl_type))
+            ->where('mc.status', 1)
+            ->select(
+                'mc.*',
+                'ml.licence_name',
+                'ml.cert_licence_code'
+            )
+            ->get();
+
+        $Existingchecklist = Cl_Checklist_applicant::where('applicant_id', $applicant_id)
+            ->where('licence_name', $applicant->license_name)
+            ->orderByDesc('id')
+            ->first();
+
+
+
+        $checkedList_1 = [];
+        $verifyList = [];
+
+        if ($Existingchecklist && $Existingchecklist->checklist_json) {
+
+            $json = is_array($Existingchecklist->checklist_json)
+                ? $Existingchecklist->checklist_json
+                : json_decode($Existingchecklist->checklist_json, true);
+
+            foreach ($json ?? [] as $row) {
+                if (!is_array($row) || !isset($row['id'])) {
+                    continue;
+                }
+
+                $checkedList_1[$row['id']] = (int) ($row['checked'] ?? 0);
+                $verifyList[$row['id']] = (int) ($row['verify'] ?? 0);
+            }
+        }
+
+
+        $Qcstaffs = DB::table('tnelb_ea_qc_models')->where('application_id', $applicant_id)->orderBy('id', 'ASC')->get();
+        $staff_checklist = DB::table('cl_staff_detail_adminstore')->where('application_id', $applicant_id)
+            ->get();
+
+        $view = match ($staff->name) {
+            'President'  => 'admin.dashboard.applicants_detail_forma',
+            'Secretary'  => 'admin.dashboard.applicants_detail_forma',
+            'Supervisor' => 'admin.dashboard.applicants_detail_forma',
+            // 'Supervisor2' => 'admin.dashboard.applicants_detail_supervisor',
+            'Assistant Secretary'    => 'admin.dashboard.applicants_detail_forma',
+
+            default      => abort(403, 'Unauthorized'),
+        };
+        $staffVerifyList = $staff_checklist
+            ->whereNotNull('staff_cc_no')
+            ->pluck('verify_flag', 'staff_cc_no')
+            ->toArray();
+
+        $maxQcStaff = $qcQscStaffs_details
+            ->filter(function ($staff) {
+                return !empty($staff->staff_cc_validity_to);
+            })
+            ->sortByDesc(function ($staff) {
+                return \Carbon\Carbon::parse($staff->staff_cc_validity_to);
+            })
+            ->first();
+
+        $maxQcCertNo = $maxQcStaff?->staff_cc_no;
+        $maxQcValidityDate = $maxQcStaff?->staff_cc_validity_to;
+
+         $cl_digitization = DB::table('mapping_digi_cls')
+            ->where('application_id', $applicant_id)
+            ->first();
+        
+        $applicant->appl_type = match(trim($applicant->appl_type)) {
+            'N' => 'New',
+            'R' => 'Renewal',
+            'D' => 'Digitisation',
+            'A' => 'Alteration',
+            default => $applicant->appl_type,
+        };
+        
+
+        return view($view, compact(
+            'applicant',
+            'cl_ownership_table',
+            'staffdetails',
+            'showQcWarning',
+            'nextForwardUser',
+            'returnForwardUser',
+            'user_entry',
+            'workflows',
+            'queries',
+            'documents',
+            'banksolvency',
+            'equipmentlist',
+            'license_name',
+            'equiplist',
+            'equipmentlist',
+            'showbankWarning',
+            'old_issued_at_date',
+            'attachments_cl',
+            'addressproof',
+            'Qcstaffs',
+            'qcQscStaffs_details',
+            'otherstaffdetails',
+            'checklist',
+            'staff_checklist',
+            'verifyList',
+            'staffVerifyList',
+            'checkedList_1',
+            'maxQcCertNo',
+            'maxQcValidityDate',
+            'cl_digitization'
+
+        ));
+    }
+
+
+
+
+    // Form A completed
+    public function applicants_detail_forma_completed($applicant_id)
+    {
+
+        $returnForwardUser = null;
+
+        $staff = Auth::user();
+
+        if (!$staff || !$staff->roles_id) {
+            return abort(403, 'Unauthorized');
+        }
+
+        $applicantQuery1 = DB::table('ccl_forma_meta')
+            ->leftJoin('payments', 'ccl_forma_meta.application_id', '=', 'payments.application_id')
+            ->where('ccl_forma_meta.application_id', $applicant_id)
+            ->select(
+                'ccl_forma_meta.*',
+                'payments.transaction_id',
+                'payments.payment_status',
+                'payments.amount',
+                'payments.payment_mode',
+                'payments.created_at as payment_date',
+                'payments.application_fee',
+                'payments.late_fee',
+            );
+
+
+
+        $applicant = $applicantQuery1
+            // ->unionAll($applicantQuery2)
+            ->orderByDesc('dt_submit')
+            ->first();
+
+        // dd($applicant->appl_type);
+        // exit;
+
+        $appl_type = trim($applicant->appl_type);
+        // dd($appl_type);
+        // exit;
+
+        if ($appl_type === 'R') {
+            // dd($applicant->old_application);
+            // exit;
+            $old_issuedat = DB::table('tnelb_license')
+                ->select('issued_at', 'created_at', 'expires_at')
+                ->where('application_id', $applicant->old_application)
+
+                ->unionAll(
+
+                    DB::table('cl_forma_lic')
+                        ->select('issued_at', 'created_at', 'expires_at')
+                        ->where('application_id', $applicant->old_application)
+
+                )
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            $old_issued_at_date = $old_issuedat->expires_at;
+
+            // dd($old_issuedat->issued_at);
+            // exit;
+        } else {
+
+            $old_issued_at_date = '0';
+        }
+
+
+        $formname = $applicant->form_name;
+
+        $license_name = DB::table('mst_licences')->where('form_code', $formname)->first();
+
+
+        if (!$applicant) {
+            return abort(404, 'Applicant not found');
+        }
+
+        if ($staff->name === "Supervisor") {
+
+            if ($applicant->application_status == 'RE') {
+
+                // $processed_by = match ($applicant->processed_by) {
+                //     'PR'  => 'President',
+                //     'SE'  => 'Secretary',
+                //     'S'  => 'Supervisor',
+                //     'A'  => 'Assistant Secretary'
+                // };
+
+                // $nextForwardUser = DB::table('mst__staffs__tbls')
+                //     ->where('name', $processed_by)
+                //     ->select('name', 'roles_id')
+                //     ->first();
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Secretary')
+                    ->select('name', 'roles_id')
+                    ->first();
+            } else {
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Assistant Secretary')
+                    ->select('name', 'roles_id')
+                    ->first();
+            }
+
+            // if ($applicant->application_status == 'RE') {
+
+            //     $processed_by = match ($applicant->processed_by) {
+            //         'PR'  => 'President',
+            //         'SE'  => 'Secretary',
+            //         'S'  => 'Supervisor',
+            //         'A'  => 'Assistant Secretary'
+            //     };
+
+            //     $nextForwardUser = DB::table('mst__staffs__tbls')
+            //         ->where('name', $processed_by)
+            //         ->select('name', 'roles_id')
+            //         ->first();
+
+            //         // dd($nextForwardUser);
+            //         // exit;
+            // } else {
+            //     $nextForwardUser = DB::table('mst__staffs__tbls')
+            //         ->where('name', 'Assistant Secretary')
+            //         ->select('name', 'roles_id')
+            //         ->first();
+
+            // }
+        }
+
+        if ($staff->name === "Supervisor2") {
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Assistant Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+        if ($staff->name === "Assistant Secretary") {
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+        if ($staff->name === "Secretary") {
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'President')
+                ->select('name', 'roles_id')
+                ->first();
+
+            $returnForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Supervisor')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+        if ($staff->name === "President") {
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'President')
+                ->select('name', 'roles_id')
+                ->first();
+
+            $returnForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Supervisor')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+        // psql -U postgres -d arundb_dec01 -p 5432 -f "D:\laravel_program\tnelb-program-arun-dec01\TNelb-Staging\db\latest_v28112025.sql"
+
+        $cl_ownership_table = DB::table('cl_ownership_table')
+            ->where('application_id', $applicant_id)
+            ->orderBy('id', 'Desc')
+            ->where('proprietor_flag', '1')
+            ->get();
+
+        $staffdetails = DB::table('tnelb_applicant_cl_staffdetails')
+            ->where('application_id', $applicant_id)
+            ->orderBy('id')
+            ->get();
+
+        $showQcWarning = false;
+
+        $licence_name_validitystaff = MstLicence::where('form_code', $formname)->first();
+
+        if ($licence_name_validitystaff && $staffdetails->count() > 0) {
+
+            $today = Carbon::today()->toDateString();
+            $applType = trim($applicant->appl_type); // N or R
+
+            /* -----------------------------
+       Get fees validity
+    ------------------------------ */
+            $licence_validitystaff = FeesValidity::where('licence_id', $licence_name_validitystaff->id)
+                ->where('form_type', $applType === 'N' ? 'N' : 'R')
+                ->where('status', 1)
+                ->whereDate('validity_start_date', '<=', $today)
+                ->orderBy('validity_start_date', 'desc')
+                ->first();
+
+            if ($licence_validitystaff && $licence_validitystaff->validity) {
+
+                /* -----------------------------
+                Compare FIRST QC validity
+                ------------------------------ */
+                $firstQcValidity = Carbon::parse($staffdetails->first()->cc_validity);
+
+                // dd($staffdetails->first()->cc_validity);
+                // exit;
+
+
+                // Licence period (months)
+                $licencePeriodEnd = Carbon::now()->addMonths((int) $licence_validitystaff->validity);
+                // dd($licencePeriodEnd);
+                // exit;
+
+                if ($firstQcValidity->lt($licencePeriodEnd)) {
+                    $showQcWarning = true;
+                }
+            }
+        }
+
+
+
+        $staff = Auth::user();
+        if (!$staff || !$staff->roles_id) {
+            return abort(403, 'Unauthorized');
+        }
+
+        $user_entry = DB::table('ccl_forma_meta')
+            ->where('application_id', $applicant_id)
+            ->select('*')
+
+            ->first();
+
+        $documents = DB::table('tnelb_applicant_doc_A')
+            ->where('application_id', $applicant_id)
+            ->select('*')
+
+            ->first();
+
+        $workflows = DB::table('tnelb_workflow_a')
+            ->leftjoin('ccl_forma_meta', 'tnelb_workflow_a.application_id', '=', 'ccl_forma_meta.application_id')
+            ->leftjoin('mst__roles', 'tnelb_workflow_a.forwarded_to', '=', 'mst__roles.id')
+            ->where('tnelb_workflow_a.application_id', $applicant_id)
+            ->select('tnelb_workflow_a.*', 'mst__roles.name', 'ccl_forma_meta.form_name', 'ccl_forma_meta.license_name')
+            ->orderBy('tnelb_workflow_a.id', 'desc')
+            ->get();
+
+        $queries = DB::table('tnelb_query_applicable as qa')
+            ->leftJoin('ccl_forma_meta as ta', 'qa.application_id', '=', 'ta.application_id')
+            ->where('qa.application_id', $applicant_id)
+            ->where('qa.query_status', 'P')
+            ->select('qa.*')
+            ->first() ?? null;
+
+        $showbankWarning = false;
+
+        $banksolvency = Tnelb_banksolvency_a::where('application_id', $applicant_id)
+            ->where('status', '1')
+            ->first();
+
+        if ($banksolvency && $banksolvency->bank_validity && $licence_validitystaff && $licence_validitystaff->validity) {
+            $bankValidity = Carbon::parse($banksolvency->bank_validity);
+
+            // Licence period (months)
+            $bankvalidityend = Carbon::now()->addMonths((int) $licence_validitystaff->validity);
+
+            if ($bankValidity->lt($bankvalidityend)) {
+                $showbankWarning = true;
+            }
+        }
+
+        // $equipmentlist = Equipment_storetmp_A::where('application_id', $applicant_id)->first();
+
+        $equiplist = Mst_equipment_tbl::where('equip_licence_name', 8)
+            ->where('status', 1)
+            ->orderBy('id')
+            ->get();
+
+        $equipmentlist = DB::table('tnelb_equimentsuser_cl')
+            // ->where('login_id', Auth::user()->login_id)
+            ->where('application_id', $applicant_id)
+            ->get();
+
+        $attachments_cl = DB::table('tnelb_attachments_cl')
+
+            ->where('application_id', $applicant_id)
+            ->get();
+
+        $addressproof = DB::table('tnelb_addressproof_cl')
+
+            ->where('application_id', $applicant_id)
+            ->first();
+
+        // $view = match ($staff->name) {
+        //     'President'  => 'admin.dashboard.applicants_president_forma',
+        //     'Secretary'  => 'admin.dashboard.applicants_detail_sec_forma',
+        //     'Supervisor' => 'admin.dashboard.applicants_detail_forma',
+        //     // 'Supervisor2' => 'admin.dashboard.applicants_detail_supervisor',
+        //     'Assistant Secretary'    => 'admin.dashboard.applicants_detail_auditor_forma',
+
+        //     default      => abort(403, 'Unauthorized'),
+        // };
+
+
+
+
+        $view = match ($staff->name) {
+            'President'  => 'admin.completedappls.applicants_forma_completed',
+            'Secretary'  => 'admin.completedappls.applicants_forma_completed',
+            'Supervisor' => 'admin.completedappls.applicants_forma_completed',
+            // 'Supervisor2' => 'admin.dashboard.applicants_detail_supervisor',
+            'Assistant Secretary'    => 'admin.completedappls.applicants_detail_auditor_forma_completed',
+
+            default      => abort(403, 'Unauthorized'),
+        };
+
+        return view($view, compact(
+            'applicant',
+            'cl_ownership_table',
+            'staffdetails',
+            'showQcWarning',
+            'nextForwardUser',
+            'returnForwardUser',
+            'user_entry',
+            'workflows',
+            'queries',
+            'documents',
+            'banksolvency',
+            'equipmentlist',
+            'license_name',
+            'equiplist',
+            'equipmentlist',
+            'showbankWarning',
+            'old_issued_at_date',
+            'attachments_cl',
+            'addressproof'
+        ));
+    }
+    // CMS
+
+    public function homeslider()
+    {
+        $sliders = Tnelb_homeslider_tbl::with('media')->orderBy('updated_at', 'desc')->get();
+
+        $media = Tnelb_Mst_Media::where([
+            ['status', '=', '1'],
+            ['type', '=', 'image']
+        ])->orderBy('updated_at', 'desc')->get();
+
+        return view('admincms.dashboard.homepage.index', compact('sliders', 'media'));
+    }
+
+
+    public function insertdata(Request $request)
+    {
+        $request->validate([
+            'slider_image' => 'required|integer|exists:tnelb_mst_media,id',
+            'slider_caption' => 'required|string',
+            'slider_status' => 'required|in:0,1,2',
+            'slider_caption_ta' => 'required',
+        ]);
+
+        $slider = Tnelb_homeslider_tbl::create([
+            'slider_image' => $request->slider_image, // ✅ store only media ID
+            'slider_caption' => $request->slider_caption,
+            'slider_caption_ta' => $request->slider_caption_ta,
+            'slider_status' => $request->slider_status,
+            // 'updated_by' => $this->updatedBy
+        ]);
+
+        $slider->load('media'); // ✅ load related media info
+
+        return response()->json([
+            'success' => 'Slider added successfully',
+            'slider' => $slider
+        ]);
+    }
+
+
+    public function update(Request $request, $id)
+    {
+        $request->validate([
+            'slider_caption' => 'required|string|max:255',
+            'slider_caption_ta' => 'required|string|max:255',
+            'slider_status' => 'required|in:0,1,2',
+        ]);
+
+        $slider = Tnelb_homeslider_tbl::findOrFail($id);
+
+        $slider->slider_caption = $request->slider_caption;
+        $slider->slider_caption_ta = $request->slider_caption_ta;
+        $slider->slider_status = $request->slider_status;
+        $slider->updated_by = auth()->user()->name;
+
+        if ($request->filled('slider_image')) {
+            $slider->slider_image = $request->slider_image;  // Store media image ID
+        }
+
+        $slider->save();
+
+        // Load media relation to send full data back
+        $slider->load('media');
+
+        return response()->json([
+            'success' => true,
+            'slider' => $slider,
+        ]);
+    }
+
+
+
+
+    public function delete($id)
+    {
+        try {
+            $slider = Tnelb_homeslider_tbl::findOrFail($id);
+
+            if ($slider->slider_image && Storage::exists('public/portaladmin/slider/' . $slider->slider_image)) {
+                Storage::delete('public/portaladmin/slider/' . $slider->slider_image);
+            }
+
+            $slider->delete();
+
+            return response()->json(['success' => true, 'message' => 'Slider deleted successfully!']);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+        }
+    }
+
+
+
+    public function insertmenu(Request $request)
+    {
+
+        $request->validate([
+            'menu_name' => 'required|string|max:255',
+            'menu_type' => 'required|string|max:255',
+        ]);
+
+        $menu = Portaladmin_menu::create([
+            'menu_name' => $request->menu_name,
+            'menu_type' => $request->menu_type,
+            'status' => $request->status ?? 1,
+        ]);
+
+        return response()->json(['success' => true, 'message' => 'Menu added successfully!', 'data' => $menu]);
+    }
+
+    // public function applicants_detail_forma($applicant_id)
+    // {
+    //     $returnForwardUser = null;
+
+
+
+    //     $staff = Auth::user();
+
+
+    //     if (!$staff || !$staff->roles_id) {
+    //         return abort(403, 'Unauthorized');
+    //     }
+
+
+
+    //     $applicant = DB::table('ccl_forma_meta')
+    //         ->leftJoin('payments', 'ccl_forma_meta.application_id', '=', 'payments.application_id')
+    //         ->where('ccl_forma_meta.application_id', $applicant_id)
+    //         ->select(
+    //             'ccl_forma_meta.*',
+    //             'payments.transaction_id',
+    //             'payments.payment_status',
+    //             'payments.amount',
+    //             'payments.payment_mode',
+    //             'payments.created_at as payment_date'
+    //         )
+    //         ->latest('payments.created_at')
+    //         ->first();
+
+    //     if (!$applicant) {
+    //         return abort(404, 'Applicant not found');
+    //     }
+
+
+    //     if ($staff->name === "Supervisor") {
+
+    //         if ($applicant->application_status == 'RE') {
+
+    //             $processed_by = match ($applicant->processed_by) {
+    //                 'PR'  => 'President',
+    //                 'SE'  => 'Secretary',
+    //                 'S'  => 'Supervisor',
+    //                 'A'  => 'Assistant Secretary'
+    //             };
+
+    //             $nextForwardUser = DB::table('mst__staffs__tbls')
+    //                 ->where('name', $processed_by)
+    //                 ->select('name', 'roles_id')
+    //                 ->first();
+
+    //                 // dd($nextForwardUser);
+    //                 // exit;
+    //         } else {
+    //             $nextForwardUser = DB::table('mst__staffs__tbls')
+    //                 ->where('name', 'Assistant Secretary')
+    //                 ->select('name', 'roles_id')
+    //                 ->first();
+
+    //         }
+    //     }
+
+    //     if ($staff->name === "Supervisor2") {
+    //         $nextForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'Assistant Secretary')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+    //     }
+
+
+    //     if ($staff->name === "Assistant Secretary") {
+    //         $nextForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'Secretary')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+    //     }
+    //     if ($staff->name === "Secretary") {
+
+    //         $nextForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'President')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+
+
+    //         $returnForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'Supervisor')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+    //     }
+
+    //     if ($staff->name === "President") {
+
+    //         $nextForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'President')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+
+    //         $returnForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'Supervisor')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+    //     }
+
+
+
+    //     $cl_ownership_table = DB::table('cl_ownership_table')
+    //         ->where('application_id', $applicant_id)
+    //         ->where('proprietor_flag', '1')
+    //         ->get();
+
+
+    //     $staffdetails = DB::table('tnelb_applicant_cl_staffdetails')
+    //         ->where('application_id', $applicant_id)
+    //         ->get();
+
+
+    //     $staff = Auth::user();
+    //     if (!$staff || !$staff->roles_id) {
+    //         return abort(403, 'Unauthorized');
+    //     }
+
+
+    //     $user_entry = DB::table('ccl_forma_meta')
+    //         ->where('application_id', $applicant_id)
+    //         ->select('*')
+    //         ->first();
+
+    //           $documents = DB::table('tnelb_applicant_doc_A')
+    //         ->where('application_id', $applicant_id)
+    //         ->select('*')
+    //         ->first();
+
+
+    //     $workflows = DB::table('tnelb_workflow_a')
+    //         ->leftjoin('ccl_forma_meta', 'tnelb_workflow_a.application_id', '=', 'ccl_forma_meta.application_id')
+    //         ->leftjoin('mst__roles', 'tnelb_workflow_a.forwarded_to', '=', 'mst__roles.id')
+    //         ->where('tnelb_workflow_a.application_id', $applicant_id)
+    //         ->select('tnelb_workflow_a.*', 'mst__roles.name', 'ccl_forma_meta.form_name', 'ccl_forma_meta.license_name')
+    //         ->orderBy('tnelb_workflow_a.created_at', 'desc')
+    //         ->get();
+
+    //     $queries = DB::table('tnelb_query_applicable as qa')
+    //         ->leftJoin('ccl_forma_meta as ta', 'qa.application_id', '=', 'ta.application_id')
+    //         ->where('qa.application_id', $applicant_id)
+    //         ->where('qa.query_status', 'P')
+    //         ->select('qa.*')
+    //         ->first() ?? null;
+
+
+    //     $view = match ($staff->name) {
+    //         'President'  => 'admin.dashboard.applicants_president_forma',
+    //         'Secretary'  => 'admin.dashboard.applicants_detail_sec_forma',
+    //         'Supervisor' => 'admin.dashboard.applicants_detail_forma',
+    //         // 'Supervisor2' => 'admin.dashboard.applicants_detail_supervisor',
+    //         'Assistant Secretary'    => 'admin.dashboard.applicants_detail_auditor_forma',
+
+    //         default      => abort(403, 'Unauthorized'),
+    //     };
+
+    //     return view($view, compact(
+    //         'applicant',
+    //         'cl_ownership_table',
+    //         'staffdetails',
+    //         'nextForwardUser',
+    //         'user_entry',
+    //         'workflows',
+    //         'queries',
+    //         'documents'
+    //     ));
+    // }
+
+
+
+    // // Form A completed
+
+    // public function applicants_detail_forma_completed($applicant_id)
+    // {
+    //     $returnForwardUser = null;
+
+
+    //     // Get the current user's role ID
+    //     $staff = Auth::user();
+
+
+    //     if (!$staff || !$staff->roles_id) {
+    //         return abort(403, 'Unauthorized');
+    //     }
+
+
+    //     // Fetch applicant details
+    //     $applicant = DB::table('ccl_forma_meta')
+    //         ->leftJoin('payments', 'ccl_forma_meta.application_id', '=', 'payments.application_id')
+    //         ->where('ccl_forma_meta.application_id', $applicant_id)
+    //         ->select(
+    //             'ccl_forma_meta.*',
+    //             'payments.transaction_id',
+    //             'payments.payment_status',
+    //             'payments.amount',
+    //             'payments.payment_mode',
+    //             'payments.created_at as payment_date'
+    //         )
+    //         ->latest('payments.created_at')
+    //         ->first();
+
+    //     if (!$applicant) {
+    //         return abort(404, 'Applicant not found');
+    //     }
+
+    //     // Fetch next role dynamically from the roles table
+    //     if ($staff->name === "Supervisor") {
+
+    //         if ($applicant->application_status == 'RE') {
+
+    //             $processed_by = match ($applicant->processed_by) {
+    //                 'PR'  => 'President',
+    //                 'SE'  => 'Secretary',
+    //                 'S'  => 'Supervisor',
+    //                 'A'  => 'Assistant Secretary'
+    //             };
+
+    //             $nextForwardUser = DB::table('mst__staffs__tbls')
+    //                 ->where('name', $processed_by)
+    //                 ->select('name', 'roles_id')
+    //                 ->first();
+    //         } else {
+    //             $nextForwardUser = DB::table('mst__staffs__tbls')
+    //                 ->where('name', 'Assistant Secretary')
+    //                 ->select('name', 'roles_id')
+    //                 ->first();
+    //         }
+    //     }
+
+    //     if ($staff->name === "Supervisor2") {
+    //         $nextForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'Assistant Secretary')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+    //     }
+
+
+    //     if ($staff->name === "Assistant Secretary") {
+    //         $nextForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'Secretary')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+    //     }
+    //     if ($staff->name === "Secretary") {
+
+    //         $nextForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'President')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+
+
+    //         $returnForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'Supervisor')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+    //     }
+
+    //     if ($staff->name === "President") {
+
+    //         $nextForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'President')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+
+    //         $returnForwardUser = DB::table('mst__staffs__tbls')
+    //             ->where('name', 'Supervisor')
+    //             ->select('name', 'roles_id')
+    //             ->first();
+    //     }
+
+
+    //     // Fetch educational qualifications
+    //     $cl_ownership_table = DB::table('cl_ownership_table')
+    //         ->where('application_id', $applicant_id)
+    //          ->orderBy('updated_at', 'ASC')
+    //         ->where('proprietor_flag', '1')
+    //         ->get();
+
+    //     // Fetch work experience
+    //     $staffdetails = DB::table('tnelb_applicant_cl_staffdetails')
+    //         ->where('application_id', $applicant_id)
+    //         ->get();
+
+    //     // Ensure user is authenticated
+    //     $staff = Auth::user();
+    //     if (!$staff || !$staff->roles_id) {
+    //         return abort(403, 'Unauthorized');
+    //     }
+
+
+    //     $user_entry = DB::table('ccl_forma_meta')
+    //         ->where('application_id', $applicant_id)
+    //         ->select('*')
+    //         ->first();
+
+    //           $documents = DB::table('tnelb_applicant_doc_A')
+    //         ->where('application_id', $applicant_id)
+    //         ->select('*')
+    //         ->first();
+
+
+    //     $workflows = DB::table('tnelb_workflow_a')
+    //         ->leftjoin('ccl_forma_meta', 'tnelb_workflow_a.application_id', '=', 'ccl_forma_meta.application_id')
+    //         ->leftjoin('mst__roles', 'tnelb_workflow_a.forwarded_to', '=', 'mst__roles.id')
+    //         ->where('tnelb_workflow_a.application_id', $applicant_id)
+    //         ->select('tnelb_workflow_a.*', 'mst__roles.name', 'ccl_forma_meta.form_name', 'ccl_forma_meta.license_name')
+    //         ->orderBy('tnelb_workflow_a.created_at', 'desc')
+    //         ->get();
+
+    //     $queries = DB::table('tnelb_query_applicable as qa')
+    //         ->leftJoin('ccl_forma_meta as ta', 'qa.application_id', '=', 'ta.application_id')
+    //         ->where('qa.application_id', $applicant_id)
+    //         ->where('qa.query_status', 'P')
+    //         ->select('qa.*')
+    //         ->first() ?? null;
+
+
+    //     $view = match ($staff->name) {
+    //         'President'  => 'admin.completedappls.applicants_forma_completed',
+    //         'Secretary'  => 'admin.completedappls.applicants_forma_completed',
+    //         'Supervisor' => 'admin.completedappls.applicants_forma_completed',
+    //         // 'Supervisor2' => 'admin.dashboard.applicants_detail_supervisor',
+    //         'Assistant Secretary'    => 'admin.completedappls.applicants_forma_completed',
+
+    //         default      => abort(403, 'Unauthorized'),
+    //     };
+
+    //     return view($view, compact(
+    //         'applicant',
+    //         'cl_ownership_table',
+    //         'staffdetails',
+    //         'nextForwardUser',
+    //         'user_entry',
+    //         'workflows',
+    //         'queries',
+    //         'documents'
+    //     ));
+    // }
+
+
+    // // CMS
+
+    // public function homeslider()
+    // {
+    //     $sliders = Tnelb_homeslider_tbl::with('media')->orderBy('updated_at', 'desc')->get();
+
+    //     $media = Tnelb_Mst_Media::where([
+    //         ['status', '=', '1'],
+    //         ['type', '=', 'image']
+    //     ])->orderBy('updated_at', 'desc')->get();
+
+    //     return view('admincms.dashboard.homepage.index', compact('sliders', 'media'));
+    // }
+
+
+    // public function insertdata(Request $request)
+    // {
+    //     $request->validate([
+    //         'slider_image' => 'required|integer|exists:tnelb_mst_media,id',
+    //         'slider_caption' => 'required|string',
+    //         'slider_status' => 'required|in:0,1,2',
+    //         'slider_caption_ta' => 'required',
+    //     ]);
+
+    //     $slider = Tnelb_homeslider_tbl::create([
+    //         'slider_image' => $request->slider_image, // ✅ store only media ID
+    //         'slider_caption' => $request->slider_caption,
+    //         'slider_caption_ta' => $request->slider_caption_ta,
+    //         'slider_status' => $request->slider_status,
+    //         'updated_by' => $this->updatedBy
+    //     ]);
+
+    //     $slider->load('media'); // ✅ load related media info
+
+    //     return response()->json([
+    //         'success' => 'Slider added successfully',
+    //         'slider' => $slider
+    //     ]);
+    // }
+
+
+    // public function update(Request $request, $id)
+    // {
+    //     $request->validate([
+    //         'slider_caption' => 'required|string|max:255',
+    //         'slider_caption_ta' => 'required|string|max:255',
+    //         'slider_status' => 'required|in:0,1,2',
+    //     ]);
+
+    //     $slider = Tnelb_homeslider_tbl::findOrFail($id);
+
+    //     $slider->slider_caption = $request->slider_caption;
+    //     $slider->slider_caption_ta = $request->slider_caption_ta;
+    //     $slider->slider_status = $request->slider_status;
+    //     $slider->updated_by = auth()->user()->name;
+
+    //     if ($request->filled('slider_image')) {
+    //         $slider->slider_image = $request->slider_image;  // Store media image ID
+    //     }
+
+    //     $slider->save();
+
+    //     // Load media relation to send full data back
+    //     $slider->load('media');
+
+    //     return response()->json([
+    //         'success' => true,
+    //         'slider' => $slider,
+    //     ]);
+    // }
+
+
+
+
+    // public function delete($id)
+    // {
+    //     try {
+    //         $slider = Tnelb_homeslider_tbl::findOrFail($id);
+
+    //         if ($slider->slider_image && Storage::exists('public/portaladmin/slider/' . $slider->slider_image)) {
+    //             Storage::delete('public/portaladmin/slider/' . $slider->slider_image);
+    //         }
+
+    //         $slider->delete();
+
+    //         return response()->json(['success' => true, 'message' => 'Slider deleted successfully!']);
+    //     } catch (\Exception $e) {
+    //         return response()->json(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    //     }
+    // }
+
+
+
+    // public function insertmenu(Request $request)
+    // {
+
+    //     $request->validate([
+    //         'menu_name' => 'required|string|max:255',
+    //         'menu_type' => 'required|string|max:255',
+    //     ]);
+
+    //     $menu = Portaladmin_menu::create([
+    //         'menu_name' => $request->menu_name,
+    //         'menu_type' => $request->menu_type,
+    //         'status' => $request->status ?? 1,
+    //     ]);
+
+    //     return response()->json(['success' => true, 'message' => 'Menu added successfully!', 'data' => $menu]);
+    // }
+
+    public function view_application_details($applicant_id)
+    {
+
+
+        $returnForwardUser = null;
+        // Fetch applicant details
+        $applicant = DB::table('tnelb_application_tbl')
+            ->leftjoin('payments', 'tnelb_application_tbl.application_id', '=', 'payments.application_id')
+            ->where('tnelb_application_tbl.application_id', $applicant_id)
+            ->select('tnelb_application_tbl.*', 'payments.*')
+            ->first();
+
+
+        if (!$applicant) {
+            return abort(403, 'Applicant not found');
+        }
+
+
+        if ($applicant->appl_type == "R") {
+
+            // $ids = [$applicant->old_application, $applicant_id];
+
+            // Fetch educational qualifications
+            $educationalQualifications = DB::table('tnelb_applicants_edu')
+                ->where('application_id', $applicant_id)
+                ->get();
+
+            // Fetch work experience
+            $workExperience = DB::table('tnelb_applicants_exp')
+                ->where('application_id', $applicant_id)
+                ->get();
+
+            // Fetch documents
+            $documents = Schema::hasTable('mst_documents')
+                ? DB::table('mst_documents')->where('application_id', $applicant_id)->get()
+                : collect([]);
+
+            // Get the last uploaded photo (if available)
+            $uploadedPhoto = TnelbApplicantPhoto::where('application_id', $applicant_id)
+                ->whereNotNull('upload_path')
+                ->orderByDesc('id')
+                ->first();
+
+        } else {
+
+            // Fetch educational qualifications
+            $educationalQualifications = DB::table('tnelb_applicants_edu')
+                ->where('application_id', $applicant_id)
+                ->orderBy('year_of_passing', 'desc')
+                ->get();
+
+            // Fetch work experience
+            $workExperience = DB::table('tnelb_applicants_exp')
+                ->where('application_id', $applicant_id)
+                ->get();
+
+            // Fetch documents
+            $documents = Schema::hasTable('mst_documents')
+                ? DB::table('mst_documents')->where('application_id', $applicant_id)->get()
+                : collect([]);
+
+            // Get the last uploaded photo (if available)
+            $uploadedPhoto = TnelbApplicantPhoto::where('application_id', $applicant_id)
+                ->whereNotNull('upload_path')
+                ->orderByDesc('id')
+                ->first();
+        }
+
+
+
+
+        // Get the current user's role ID
+        $staff = Auth::user();
+
+
+        if (!$staff || !$staff->roles_id) {
+            return abort(403, 'Unauthorized');
+        }
+
+        // Fetch next role dynamically from the roles table
+        if ($staff->name === "Supervisor") {
+
+            if ($applicant->status == 'RE') {
+
+                // $processed_by = match ($applicant->processed_by) {
+                //     'PR'  => 'President',
+                //     'SE'  => 'Secretary',
+                //     'S'  => 'Supervisor',
+                //     'A'  => 'Assistant Secretary'
+                // };
+                $processed_by = 'Secretary';
+
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', $processed_by)
+                    ->select('name', 'roles_id')
+                    ->first();
+            } else {
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Assistant Secretary')
+                    ->select('name', 'roles_id')
+                    ->first();
+            }
+        }
+
+
+        if ($staff->name === "Supervisor2") {
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Assistant Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+
+        if ($staff->name === "Assistant Secretary") {
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Secretary')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+        if ($staff->name === "Secretary") {
+
+            if ($applicant->form_id == 1) {
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'President')
+                    ->select('name', 'roles_id')
+                    ->first();
+
+                $returnForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Supervisor')
+                    ->select('name', 'roles_id')
+                    ->first();
+            } else {
+
+                $nextForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Secretary')
+                    ->select('name', 'roles_id')
+                    ->first();
+
+                $returnForwardUser = DB::table('mst__staffs__tbls')
+                    ->where('name', 'Supervisor')
+                    ->select('name', 'roles_id')
+                    ->first();
+            }
+        }
+
+        if ($staff->name === "President") {
+
+            $nextForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'President')
+                ->select('roles_id', 'name')
+                ->first();
+
+            $returnForwardUser = DB::table('mst__staffs__tbls')
+                ->where('name', 'Supervisor')
+                ->select('name', 'roles_id')
+                ->first();
+        }
+
+
+
+
+        $user_entry = DB::table('tnelb_application_tbl')
+            ->where('application_id', $applicant_id) // Filter by specific application
+            ->select('*')
+            ->first();
+
+
+
+        $workflows = $this->queryCompetencyWorkflowsWithReturnApplicantLog(
+            $applicant_id,
+            ['mst_roles.role_name', 'tnelb_application_tbl.form_name', 'tnelb_application_tbl.license_name'],
+            true,
+            true
+        );
+
+
+
+        $queries = DB::table('tnelb_query_applicable as qa')
+            ->leftJoin('tnelb_application_tbl as ta', 'qa.application_id', '=', 'ta.application_id')
+            ->where('qa.application_id', $applicant_id)
+            ->where('qa.query_status', 'P')
+            ->select('qa.*')
+            ->orderByDesc('qa.id')
+            ->get();
+
+        return view('admin.dashboard.view_application', compact(
+            'applicant',
+            'educationalQualifications',
+            'workExperience',
+            'uploadedPhoto',
+            'documents',
+            'nextForwardUser',
+            'returnForwardUser',
+            'workflows',
+            'queries',
+            'user_entry',
+            'staff'
+        ));
+    }
+
+    /**
+     * Read-only completed competency application (Form S / W / WH / P) with workflow timeline.
+     */
+    public function viewCompletedApplicationDetail($applicant_id)
+    {
+        $staff = Auth::user();
+        if (! $staff) {
+            abort(403, 'Unauthorized');
+        }
+
+        $applicantId = trim((string) $applicant_id);
+        $applicant = app(CompetencyApplicationService::class)->findApplicantWithPayment($applicantId);
+        if (! $applicant) {
+            abort(404, 'Completed application not found.');
+        }
+
+        $formName = strtoupper(trim((string) ($applicant->form_name ?? '')));
+        if (str_starts_with($formName, 'FORM ')) {
+            $formName = trim(substr($formName, 5));
+        }
+        $applicant->form_name = $formName !== '' ? $formName : (string) ($applicant->form_name ?? '');
+        $applicant->license_name = $applicant->license_name ?? $applicant->certificate_name ?? $applicant->form_name;
+        $applicant->certificate_name = $applicant->certificate_name ?? $applicant->license_name;
+        $applicant->applicants_address = $applicant->applicants_address ?? $applicant->applicant_address ?? null;
+        $applicant->applicant_address = $applicant->applicant_address ?? $applicant->applicants_address ?? null;
+
+        $related = $this->loadCompletedCompetencyRelated($applicantId, $applicant, $formName);
+        $checklistState = $this->loadCompletedCompetencyChecklist($applicant);
+
+        if (in_array(strtoupper((string) ($applicant->appl_type ?? '')), ['A', 'R', 'D'], true)) {
+            app(CompetencyQcQscService::class)->overlayOnApplicant($applicant);
+        }
+
+        $workflows = $this->queryCompetencyWorkflowsWithReturnApplicantLog(
+            $applicantId,
+            ['app_tbl.form_name'],
+            true,
+            true
+        );
+
+        $ccDigitization = null;
+        if (strtoupper((string) ($applicant->appl_type ?? '')) === 'D') {
+            $ccDigitization = Tnelb_CC_Digitization::where('application_id', $applicantId)
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        return view('admin.completedappls.competency.completed_appl_view', [
+            'staff' => $staff,
+            'applicant' => $applicant,
+            'user_entry' => $applicant,
+            'educationalQualifications' => $related['edu'],
+            'workExperience' => $related['exp'],
+            'uploadedPhoto' => $related['photo'],
+            'uploadedSign' => $related['sign'],
+            'alterationProofs' => $related['alterationProofs'],
+            'parentApplicantForAlter' => $related['parent'],
+            'institute_details' => $related['institutes'],
+            'formSWorkflowAppPk' => $related['workflowPk'],
+            'formSMasterWorkflowAppPk' => $related['masterWorkflowPk'],
+            'isFormP' => $formName === 'P',
+            'workflows' => $workflows,
+            'queries' => collect(),
+            'cc_digitization' => $ccDigitization,
+            'checklist' => $checklistState['checklist'],
+            'checkedList_1' => $checklistState['checked'],
+            'verifyList' => $checklistState['verify'],
+            'nextForwardUser' => (object) ['roles_id' => 0, 'name' => ''],
+            'returnForwardUser' => (object) ['roles_id' => 0, 'name' => ''],
+        ]);
+    }
+
+    /**
+     * @return array{
+     *     edu: \Illuminate\Support\Collection,
+     *     exp: \Illuminate\Support\Collection,
+     *     photo: mixed,
+     *     sign: mixed,
+     *     alterationProofs: \Illuminate\Support\Collection,
+     *     parent: mixed,
+     *     institutes: \Illuminate\Support\Collection,
+     *     workflowPk: ?int,
+     *     masterWorkflowPk: ?int
+     * }
+     */
+    private function loadCompletedCompetencyRelated(string $applicantId, object $applicant, string $formName): array
+    {
+        $edu = collect();
+        $exp = collect();
+        $photo = null;
+        $sign = null;
+        $alterationProofs = collect();
+        $parent = null;
+        $workflowPk = null;
+        $masterWorkflowPk = null;
+
+        if (CompetencyDocumentSupport::usesVersionedStorage($formName)) {
+            $workflowApp = CC_Forms_Meta::findByApplicationId($applicantId, $formName)
+                ?: CC_Forms_Meta::findByApplicationId($applicantId);
+            if ($workflowApp) {
+                $review = app(CompetencyDocumentReviewService::class)->buildStaffReviewContext($workflowApp);
+                $edu = $review['educationalQualifications'] ?? collect();
+                $exp = $review['workExperience'] ?? collect();
+                $photo = $review['uploadedPhoto'] ?? null;
+                $sign = $review['uploadedSign'] ?? null;
+                $alterationProofs = $review['alterationProofs'] ?? collect();
+                $parentApp = $review['parentApplication'] ?? null;
+                $workflowPk = isset($workflowApp->app_id) ? (int) $workflowApp->app_id : null;
+                $masterWorkflowPk = $parentApp && isset($parentApp->app_id) ? (int) $parentApp->app_id : null;
+                if (strtoupper((string) ($applicant->appl_type ?? '')) === 'A' && $parentApp) {
+                    $parent = $parentApp;
+                    $parent->applicants_address = $parent->applicants_address ?? $parent->applicant_address ?? null;
+                    $parent->applicant_name = $parent->applicant_name ?? $parent->applicants_name ?? null;
+                }
+            }
+        }
+
+        if (! $parent && strtoupper((string) ($applicant->appl_type ?? '')) === 'A' && ! empty($applicant->old_application)) {
+            $parent = CC_Forms_Meta::findByApplicationId((string) $applicant->old_application);
+        }
+
+        $institutes = collect();
+        if ($formName === 'P') {
+            $this->overlayCompletedFormPFields($applicant);
+            if (Schema::hasTable('tnelb_applicant_institute')) {
+                $institutes = TnelbAppsInstitute::where('application_id', $applicantId)
+                    ->where(function ($q) {
+                        $q->where('institute_status', 1)->orWhereNull('institute_status');
+                    })
+                    ->get();
+            }
+            $exp = $exp->map(function ($row) {
+                if (is_object($row) && empty($row->company_name) && ! empty($row->org_name)) {
+                    $row->company_name = $row->org_name;
+                }
+
+                return $row;
+            });
+        }
+
+        return [
+            'edu' => $edu,
+            'exp' => $exp,
+            'photo' => $photo,
+            'sign' => $sign,
+            'alterationProofs' => $alterationProofs,
+            'parent' => $parent,
+            'institutes' => $institutes,
+            'workflowPk' => $workflowPk,
+            'masterWorkflowPk' => $masterWorkflowPk,
+        ];
+    }
+
+    private function overlayCompletedFormPFields(object $applicant): void
+    {
+        $employer = trim((string) ($applicant->employer_detail ?? $applicant->employer_name ?? ''));
+        if ($employer === '' && strtoupper((string) ($applicant->appl_type ?? '')) === 'A') {
+            $parentId = trim((string) ($applicant->old_application ?? ''));
+            if ($parentId !== '' && Schema::hasTable('cc_form_p_meta')) {
+                $employer = trim((string) (DB::table('cc_form_p_meta')->where('application_id', $parentId)->value('employer_detail') ?? ''));
+            }
+        }
+        if ($employer !== '') {
+            $applicant->employer_detail = $employer;
+        }
+    }
+
+    /**
+     * @return array{checklist: \Illuminate\Support\Collection, checked: array<int|string, int>, verify: array<int|string, int>}
+     */
+    private function loadCompletedCompetencyChecklist(object $applicant): array
+    {
+        $licenceCode = trim((string) ($applicant->license_name ?? $applicant->certificate_name ?? ''));
+        $certificateName = trim((string) ($applicant->certificate_name ?? $licenceCode));
+        $applType = strtoupper(trim((string) ($applicant->appl_type ?? 'N')));
+
+        $checklist = collect();
+        if ($licenceCode !== '' && Schema::hasTable('mst_checklists') && Schema::hasTable('mst_licences')) {
+            $checklist = DB::table('mst_checklists as mc')
+                ->join('mst_licences as ml', 'ml.id', '=', 'mc.cert_license_id')
+                ->where('ml.cert_licence_code', $licenceCode)
+                ->where('mc.appl_type', $applType)
+                ->where('mc.status', 1)
+                ->select('mc.*', 'ml.licence_name', 'ml.cert_licence_code')
+                ->get();
+        }
+
+        $checked = [];
+        $verify = [];
+        $saved = CC_Checklist_applicant::where('applicant_id', $applicant->application_id)
+            ->where('certificate_name', $certificateName)
+            ->first();
+        if ($saved && $saved->checklist_json) {
+            $json = json_decode($saved->checklist_json, true);
+            if (is_array($json)) {
+                foreach ($json as $row) {
+                    if (! is_array($row) || ! isset($row['id'])) {
+                        continue;
+                    }
+                    $checked[$row['id']] = (int) ($row['checked'] ?? 0);
+                    $verify[$row['id']] = (int) ($row['verify'] ?? 1);
+                }
+            }
+        }
+
+        return [
+            'checklist' => $checklist,
+            'checked' => $checked,
+            'verify' => $verify,
+        ];
+    }
+    public function viewCompletedApplicationDetail_bk($applicant_id)
+    {
+        $staff = Auth::user();
+        if (!$staff) {
+            return abort(403, 'Unauthorized');
+        }
+
+        $applicant = null;
+        $workflows = collect();
+        $user_entry = null;
+
+        $appService = app(CompetencyApplicationService::class);
+        $ccApplicant = $appService->findApplicantWithPayment($applicant_id);
+        $ccStatus = $ccApplicant
+            ? strtoupper(trim((string) ($ccApplicant->app_status ?? $ccApplicant->status ?? '')))
+            : '';
+
+        if ($ccApplicant && $ccStatus === 'A') {
+            $applicant = $ccApplicant;
+            $user_entry = $applicant;
+            $workflows = $this->queryCompetencyWorkflowsWithReturnApplicantLog(
+                $applicant_id,
+                ['mr.role_name'],
+                false,
+                true
+            );
+        }
+
+        // Contractor (EA, SA, B, SB)
+        if (!$applicant) {
+            foreach (['ccl_forma_meta', 'tnelb_esa_applications', 'tnelb_eb_applications', 'tnelb_esb_applications'] as $tbl) {
+                if (!Schema::hasTable($tbl)) {
+                    continue;
+                }
+
+                $row = DB::table($tbl)->where('application_id', $applicant_id)->where('application_status', 'A')->first();
+                if ($row) {
+                    $applicant = (object) array_merge((array) $row, [
+                        'form_name' => $row->form_name ?? 'N/A',
+                        'license_name' => $row->license_name ?? 'N/A',
+                        'applicant_name' => $row->applicant_name ?? 'N/A',
+                    ]);
+                    $user_entry = $applicant;
+                    $workflows = DB::table('tnelb_workflow_a')
+                        ->leftJoin('mst_roles', 'tnelb_workflow_a.forwarded_to', '=', 'mst_roles.r_id')
+                        ->where('tnelb_workflow_a.application_id', $applicant_id)
+                        ->select('tnelb_workflow_a.*', 'mst_roles.role_name')
+                        ->orderBy('tnelb_workflow_a.id', 'desc')
+                        ->get();
+                    break;
+                }
+            }
+        }
+
+        if (!$applicant) {
+            return abort(404, 'Completed application not found.');
+        }
+
+        // Educational qualifications, work experience and documents (for quick review)
+        $ids = [$applicant_id];
+        $applType = strtoupper((string)($applicant->appl_type ?? ''));
+        $oldApplication = $applicant->old_application ?? null;
+        if ($applType === 'R' && !empty($oldApplication)) {
+            $ids[] = $oldApplication;
+        }
+
+        $educationalQualifications = DB::table('tnelb_applicants_edu')
+            ->whereIn('application_id', $ids)
+            ->orderByDesc('year_of_passing')
+            ->get();
+
+        $workExperience = DB::table('tnelb_applicants_exp')
+            ->whereIn('application_id', $ids)
+            ->get();
+
+        $documents = Schema::hasTable('mst_documents')
+            ? DB::table('mst_documents')->whereIn('application_id', $ids)->get()
+            : collect([]);
+
+        $uploadedPhoto = TnelbApplicantPhoto::whereIn('application_id', $ids)
+            ->whereNotNull('upload_path')
+            ->orderByDesc('id')
+            ->first();
+
+        return view('admin.completed_appl_view', compact(
+            'applicant',
+            'workflows',
+            'user_entry',
+            'staff',
+            'educationalQualifications',
+            'workExperience',
+            'documents',
+            'uploadedPhoto'
+        ));
+    }
+
+    /**
+     * Competency (tnelb_workflow) rows with correlated subqueries to
+     * tnelb_return_to_applicant_log for QU + SE/PR (return-to-applicant audit).
+     * PostgreSQL only (uses interval, extract(epoch)).
+     *
+     * @param  list<string|\Illuminate\Database\Query\Expression>  $extraSelect
+     * @return \Illuminate\Support\Collection<int, object>
+     */
+    private function queryCompetencyWorkflowsWithReturnApplicantLog(
+        string $applicationId,
+        array $extraSelect = [],
+        bool $joinApplicationTbl = true,
+        bool $orderByIdDesc = true
+    ) {
+        $appService = app(CompetencyApplicationService::class);
+        $applicant = $appService->findApplicantWithPayment($applicationId);
+        $workflowTable = $appService->resolveWorkflowTable($applicationId, $applicant);
+        $metaTable = $appService->resolveMetaTable($applicationId, $applicant);
+
+        if ($joinApplicationTbl && in_array($metaTable, app(CompetencyMetaService::class)->allMetaTables(), true) && ! collect($extraSelect)->contains(fn($s) => is_string($s) && str_contains($s, 'license_name'))) {
+            $extraSelect[] = DB::raw('app_tbl.certificate_name as license_name');
+        }
+
+        $extraSelect = array_map(function ($item) {
+            if (is_string($item)) {
+                return str_replace('tnelb_application_tbl.', 'app_tbl.', $item);
+            }
+
+            return $item;
+        }, $extraSelect);
+
+        return app(CompetencyWorkflowService::class)->queryWithReturnApplicantLog(
+            $applicationId,
+            $workflowTable,
+            $metaTable,
+            $extraSelect,
+            $joinApplicationTbl,
+            $orderByIdDesc
+        );
+    }
+
+    /**
+     * @deprecated Use CompetencyWorkflowService::hydrateWorkflowReturnLogFields()
+     * @param  \Illuminate\Support\Collection<int, object>  $workflows
+     * @return \Illuminate\Support\Collection<int, object>
+     */
+    private function hydrateWorkflowReturnLogFields($workflows)
+    {
+        return app(CompetencyWorkflowService::class)->hydrateWorkflowReturnLogFields($workflows);
+    }
+}
